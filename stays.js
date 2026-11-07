@@ -1,9 +1,9 @@
 /* Concierge · Stay v12. window.D={cities:{lis:{n,d,ci,co,k,t,by,tz}},booked:{lis:{name,total,source,link}},saved:[ids],chosen:{lis:id},s:[[city,id,kind,name,tier,night,total,seller,official,lowP,lowS,rating,reviews,where,link,stars]]}.
  Only bookable stays. Click card = details drawer (choose / open on right / bookmark). Bookmark = shortlist. Choose = one per city -> concierge. */
-(function(){const D=window.D,A=document.getElementById('app');
+(function(){const D=window.D,A=document.getElementById('app')||(()=>{const s=document.currentScript,r=s&&s.getRootNode?s.getRootNode():null;let a=r&&r.querySelector?r.querySelector('#app'):null;if(!a&&s&&s.parentNode){a=document.createElement('div');a.id='app';s.parentNode.insertBefore(a,s)}return a})();if(!A||!D){if(A)A.textContent='Concierge widget: window.D is missing.';return}
 const SP='cubic-bezier(.32,.72,0,1)';
 const css=`.sw{--l:#0b0b0c;--l2:rgba(30,30,38,.74);--gl:rgba(255,255,255,.66);--hi:rgba(255,255,255,.9);--rim:rgba(255,255,255,.85);--ed:rgba(255,255,255,.55);--sh:0 8px 28px rgba(30,30,60,.10);--g:#34c759;--in:#5856d6;--or:#ff9500;--bk:#ffb800;--bl:#007aff;--ok:#34c759;
-position:relative;overflow:hidden;color:var(--l);font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif;border-radius:22px;padding:12px;display:flex;flex-direction:column;gap:10px;isolation:isolate;background:#f4f0ea}
+position:relative;overflow:hidden;color:var(--l);font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif;border-radius:22px;padding:16px;display:flex;flex-direction:column;gap:12px;isolation:isolate;background:#f4f0ea}
 .sw.skyd{--l:#fff;--l2:rgba(235,235,245,.8);--gl:rgba(34,36,52,.72);--hi:rgba(255,255,255,.18);--rim:rgba(255,255,255,.08);--ed:rgba(255,255,255,.14);--sh:0 8px 28px rgba(0,0,0,.35)}
 .sw *{box-sizing:border-box}.sw button,.sw select{all:unset;border:0!important;box-shadow:none!important;background:transparent!important;min-height:0!important;height:auto!important;cursor:pointer;-webkit-tap-highlight-color:transparent;transition:transform .35s ${SP}}.sw button:active{transform:scale(.94)}.sw button:focus,.sw button:focus-visible,.sw select:focus{outline:none!important}
 .sw .glass{background:var(--gl);-webkit-backdrop-filter:blur(22px) saturate(180%);backdrop-filter:blur(22px) saturate(180%);border:0.5px solid var(--ed);box-shadow:inset 0 1px 0 var(--rim),var(--sh)}
@@ -46,7 +46,9 @@ position:relative;overflow:hidden;color:var(--l);font-family:-apple-system,Blink
 @media (prefers-color-scheme:dark){.sw:not(.skyd) .bg::after{background:rgba(0,0,0,.45)}.sw:not(.skyd){--l:#fff;--l2:rgba(235,235,245,.8);--gl:rgba(34,36,52,.72);--hi:rgba(255,255,255,.18);--rim:rgba(255,255,255,.08);--ed:rgba(255,255,255,.14)}}
 .sw .spot{position:absolute;width:300px;height:300px;margin:-150px 0 0 -150px;left:var(--sx,50%);top:var(--sy,40%);border-radius:50%;background:radial-gradient(circle,rgba(255,255,255,.3),transparent 65%);opacity:0;transition:left .7s ${SP},top .7s ${SP},opacity .5s}.sw .spot.on{opacity:1}.sw.skyd .spot{background:radial-gradient(circle,rgba(160,180,255,.14),transparent 65%)}
 .sw .list{transition:opacity .2s}.sw .list.out{opacity:0}
-@media (prefers-reduced-motion:reduce){.sw *{animation:none!important;transition:none!important}}`;
+@media (prefers-reduced-motion:reduce){.sw *{animation:none!important;transition:none!important}}
+/* shared Concierge scale: 16px padding (12px under 440px), 12px between sections, 8px inside */
+@media (max-width:440px){.sw{padding:12px}}`;
 const e=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const T={b:['Budget','var(--g)'],l:['Larping','var(--in)'],x:['Balling out','var(--or)']};
 const S=D.s.map(r=>({c:r[0],id:r[1],k:r[2],n:r[3],t:r[4],ni:r[5],to:r[6],se:r[7],of:r[8],lp:r[9],ls:r[10],ra:r[11],rv:r[12],w:r[13],ln:r[14],st:r[15]}));
@@ -108,4 +110,21 @@ const t=h+m/60,real=t>=5&&t<8?'dawn':t>=8&&t<17?'day':t>=17&&t<20?'dusk':'night'
 let [x,y]=P.pos;if(!force&&ph=='day'){const f=(t-8)/9;x=10+f*80;y=14+Math.pow(Math.abs(f-.5)*2,2)*30}el.style.setProperty('--ox',x+'%');el.style.setProperty('--oy',y+'%');el.dataset.ph=ph;
 if(k==city){W.classList.toggle('skyd',!!P.d);const tf=new Intl.DateTimeFormat('en-US',{timeZone:tz,hour:'numeric',minute:'2-digit'}).format(new Date());A.querySelector('#clk').innerHTML=`<span aria-hidden="true">◐</span>${force?'Preview: '+ph+' · tap for next':tf+' '+e(C(k).n)+' · '+e(C(k).by||'')}`}})}
 A.querySelector('#clk').onclick=()=>{const i=force?ORDER.indexOf(force)+1:0;force=i<ORDER.length?ORDER[i]:null;sky()};
-controls();wire();totals();sky();setInterval(sky,60000);})();
+controls();wire();totals();sky();setInterval(sky,60000);/* Ask Concierge bar (standard in every Concierge widget): one-line pill at the bottom of the card. The arrow shows once there is text;
+ Enter or the arrow calls sendPrompt("[<what is on screen>] <text>"), clears the field and shows "Sent to chat" for a moment. */
+function askBar(sel,ctx,look){const b=document.createElement('form');b.className='askc '+look;b.setAttribute('autocomplete','off');
+b.innerHTML=`<style>.askc{all:unset;box-sizing:border-box;display:flex;align-items:center;width:100%;min-width:0;height:44px;border-radius:22px;padding:0 0 0 16px;flex:none;position:relative;font-family:inherit;transition:box-shadow .2s}
+.askc input{all:unset;box-sizing:border-box;flex:1;min-width:0;height:44px;font-size:14px;color:var(--aT);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.askc input::placeholder{color:var(--aP);opacity:1;transition:color .2s}.askc.ok input::placeholder{color:var(--aA)}
+.askc.askc .go{all:unset;box-sizing:border-box!important;width:44px!important;height:44px!important;min-height:0!important;min-width:44px!important;border:0!important;background:transparent!important;box-shadow:none!important;display:grid!important;place-items:center;flex:none;cursor:pointer;-webkit-tap-highlight-color:transparent;opacity:0;transform:scale(.5);pointer-events:none;transition:transform .35s cubic-bezier(.32,.72,0,1),opacity .2s}
+.askc.has .go{opacity:1;transform:none;pointer-events:auto}.askc .go i{width:32px;height:32px;border-radius:50%;display:grid;place-items:center;background:var(--aA);color:var(--aAT)}.askc .go svg{display:block;fill:currentColor}.askc .go:active i{transform:scale(.92)}
+.askc .go:focus-visible i{box-shadow:0 0 0 2px var(--aT)}.askc:focus-within{box-shadow:var(--aS),0 0 0 2px var(--aA)}
+.askc.gmail{--aT:#1f1f1f;--aP:#444746;--aA:#0b57d0;--aAT:#fff;--aS:0 0 0 0 transparent;background:#e9eef6}
+.askc.glass{--aT:#0b0b0c;--aP:rgba(30,30,38,.55);--aA:#007aff;--aAT:#fff;--aS:inset 0 0 0 .5px rgba(255,255,255,.75),inset 0 1px 0 rgba(255,255,255,.9),0 4px 16px rgba(0,0,0,.08);background:rgba(255,255,255,.55);-webkit-backdrop-filter:blur(20px) saturate(180%);backdrop-filter:blur(20px) saturate(180%);box-shadow:var(--aS)}
+@media (prefers-color-scheme:dark){.askc.gmail{--aT:#e3e3e3;--aP:#9aa0a6;--aA:#a8c7fa;--aAT:#062e6f;background:#3c4043}.askc.glass{--aT:#fff;--aP:rgba(235,235,245,.55);--aA:#0a84ff;--aS:inset 0 0 0 .5px rgba(255,255,255,.16),inset 0 1px 0 rgba(255,255,255,.08),0 4px 16px rgba(0,0,0,.3);background:rgba(44,44,50,.55)}}
+@media (prefers-reduced-motion:reduce){.askc,.askc *{transition:none!important}}</style><input type="text" enterkeyhint="send" placeholder="Ask Concierge…" aria-label="Ask Concierge"><button type="submit" class="go" aria-label="Send to chat"><i><svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12l1.41 1.41L11 7.83V20h2V7.83l5.58 5.59L20 12l-8-8-8 8z"/></svg></i></button>`;
+const i=b.querySelector('input'),ph=i.placeholder;let tm;const reset=()=>{b.classList.remove('ok');i.placeholder=ph};
+i.oninput=()=>{b.classList.toggle('has',!!i.value.trim());reset()};
+b.onsubmit=ev=>{ev.preventDefault();const t=i.value.trim();if(!t)return;sendPrompt('['+ctx()+'] '+t);i.value='';b.classList.remove('has');b.classList.add('ok');i.placeholder='Sent to chat';clearTimeout(tm);tm=setTimeout(reset,2200)};
+/* the templates re-render their root, so keep the bar (and what is typed in it) attached as the root's last child */
+const put=()=>{const r=A.querySelector(sel);if(r&&r.lastElementChild!==b){const f=document.activeElement===i;r.appendChild(b);if(f)i.focus()}};new MutationObserver(put).observe(A,{childList:true,subtree:true});put()}
+askBar('.sw',()=>'Stay · '+((D.cities[city]||{}).n||city),'glass');})();
