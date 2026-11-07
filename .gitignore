@@ -1,0 +1,5 @@
+*.json
+samples/
+*.bak.js
+.DS_Store
+sync.sh
