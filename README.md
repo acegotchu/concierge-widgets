@@ -12,19 +12,22 @@ The data schema is documented in the comment at the top of each file. No data sh
 | `deals.js` | Concierge · Deals |
 | `open.js` | Concierge · Open (everything still unresolved) |
 | `week.js` | Concierge · Week (Sunday scoreboard) |
+| `usage.js` | Concierge · Usage (plan meters, lane model fit, top 3 savings) |
+| `manager.js` | Concierge · Manager scorecard (one grade, six checks, next best moves) |
 
 Usage:
 
 ```html
 <div id="app"></div>
 <script>window.D = { /* data */ };</script>
-<script src="https://cdn.jsdelivr.net/gh/acegotchu/concierge-widgets@v6/mail.js"></script>
+<script src="https://cdn.jsdelivr.net/gh/acegotchu/concierge-widgets@v7/mail.js"></script>
 ```
 
 Order matters: `#app` first, then `window.D`, then the template script.
 
 ## Versions
 
+- v7: two new widgets, Usage (4 meters with reset times, lane table with model fit, 3 one-tap savings) and Manager scorecard (grade, follow-through, asks, speed, accuracy, pipeline, Instinct sync, next best moves).
 - v6: Ask Concierge bar is Liquid Glass in every widget (Mail gets a soft tinted backdrop); Week becomes 5 swipeable pages (Overview, TikTok, LinkedIn, IG @startupgotchu, IG personal).
 - v5: new Week widget (Sunday scoreboard).
 - v4: Mail always shows the full email and earlier messages; thread and reply scroll inside the card (about 700px).
