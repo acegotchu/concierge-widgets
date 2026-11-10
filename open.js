@@ -1,10 +1,69 @@
 /* Concierge · Open: everything still unresolved, callable from any session. Built by build_open_data.py from open.json + lanes/*.needs.json.
- window.D={today:"YYYY-MM-DD",items:[{id,who:"Ace"|"Manager"|<lane>,area,title,detail|null,due:"YYYY-MM-DD"|null,money:bool,
+ "On me" is His Grace's to-do list (it absorbed the Checklist widget): D.me groups from todo_groups.py, each row
+ {id,title,sub,chip,urgent,due,detail,action,area,source}; a count and ring in the header track what he has ticked.
+ window.D={today:"YYYY-MM-DD",date:"Mon Nov 9",me:[{title,items:[..]}],items:[{id,who:"Ace"|"Manager"|<lane>,area,title,detail|null,due:"YYYY-MM-DD"|null,money:bool,
    status:"open"|"waiting",action:"A / B"|null,source}]}   (done items are left out by the builder; order is the builder's)
  Header counts, segmented filter (On me / Lanes / All, default On me), rows grouped Today / This week / Later.
  Check circle = done locally (strike-through, Undo). Tap a row to open it: detail + action pills (action split on " / ").
  Footer "Send N updates" sends ONE sendPrompt. Ask Concierge bar at the bottom. List scrolls inside the card (about 560px). */
-(function(){const D=window.D,A=document.getElementById('app')||(()=>{const s=document.currentScript,r=s&&s.getRootNode?s.getRootNode():null;let a=r&&r.querySelector?r.querySelector('#app'):null;if(!a&&s&&s.parentNode){a=document.createElement('div');a.id='app';s.parentNode.insertBefore(a,s)}return a})();if(!A||!D){if(A)A.textContent='Concierge widget: window.D is missing.';return}const SP='cubic-bezier(.32,.72,0,1)';
+(function(){const D=window.D,A=document.getElementById('app')||(()=>{const s=document.currentScript,r=s&&s.getRootNode?s.getRootNode():null;let a=r&&r.querySelector?r.querySelector('#app'):null;if(!a&&s&&s.parentNode){a=document.createElement('div');a.id='app';s.parentNode.insertBefore(a,s)}return a})();if(!A||!D){if(A)A.textContent='Concierge widget: window.D is missing.';return}
+/*SKIN:BEGIN*/
+/* Theme layer (shared; synced into every template by _skin/sync.py). The default is the Concierge look and needs nothing.
+ window.D.theme="ace" (or data-theme="ace" on #app) adds the ace skin: the acegotchu.com direction F look (bone and ink, one ember
+ accent, Inter Tight, sharp corners, flat with grain). The skin is one <style> placed right after #app, scoped to [data-skin=ace],
+ so it survives re-renders and every behavior stays the template's own. The signature loads from D.logo (D.logoLight for dark grounds), else ace-logo.png
+ and ace-logo-light.png next to the template script; with neither, headers fall back to the title alone. A new theme = a new CSS file per template. */
+const SKIN=String(D.theme||A.getAttribute('data-theme')||'').toLowerCase(),SKIN_SRC=(()=>{try{const s=document.currentScript;return s&&s.src?s.src.replace(/[^\/?#]*([?#].*)?$/,''):''}catch(e){return ''}})();
+function skin(root,css){if(SKIN!=='ace')return;A.setAttribute('data-skin','ace');
+const doc=A.ownerDocument;if(!doc.querySelector('link[data-ace-font]')){const l=doc.createElement('link');l.rel='stylesheet';l.href='https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700&display=swap';l.setAttribute('data-ace-font','');doc.head.appendChild(l)}
+const logo=D.logo||(SKIN_SRC?SKIN_SRC+'ace-logo.png':''),logoL=D.logoLight||(SKIN_SRC?SKIN_SRC+'ace-logo-light.png':logo),P='[data-skin=ace] '+root,G="url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 .07 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E\")";
+const base=`& {--a-bone:#F2EEE6;--a-ground:#FFFFFF;--a-stone:#E2DED7;--a-ink:#111111;--a-label:#6F6B65;--a-ember:#9C4A2B;--a-emberT:#9C4A2B;--a-emberS:rgba(156,74,43,.10);--a-on:#FFFFFF;--a-q:200ms;--a-b:320ms;--a-out:cubic-bezier(.2,0,0,1);--a-logoD:${logo?`url("${logo}")`:'none'};--a-logoL:${logoL?`url("${logoL}")`:'none'};--a-logo:var(--a-logoD);--a-grain:${G};
+font-family:"Inter Tight",Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif!important;letter-spacing:-.01em;color:var(--a-ink)!important;background:var(--a-grain),var(--a-bone)!important;border-radius:0!important;box-shadow:none!important;-webkit-font-smoothing:antialiased}
+@media (prefers-color-scheme:dark){& {--a-bone:#111111;--a-ground:#1A1917;--a-stone:#2D2B28;--a-ink:#F2EEE6;--a-label:#9F998F;--a-emberT:#DB8D6B;--a-emberS:rgba(219,141,107,.14);--a-logo:var(--a-logoL)}}
+& ::before,& ::after{text-shadow:none}& >::before,& >::after,&::before,&::after{display:none!important}
+&& *,&&{border-radius:0!important;-webkit-backdrop-filter:none!important;backdrop-filter:none!important;text-shadow:none!important;font-family:inherit}
+& .ace-n{font-weight:600!important;letter-spacing:-.05em!important;font-variant-numeric:tabular-nums}
+& .askc{--aT:var(--a-ink);--aP:var(--a-label);--aA:var(--a-ember);height:48px;background:var(--a-ground)!important;box-shadow:inset 0 0 0 1px var(--a-stone)!important;font-family:inherit}
+& .askc:focus-within{box-shadow:inset 0 0 0 1px var(--a-ink)!important}& .askc input{font-size:15px;letter-spacing:-.01em;height:48px;font-family:inherit}& .askc.askc .go{height:48px!important;background:none!important}
+& .askc .go i{width:30px;height:30px;background:var(--a-ember)!important;box-shadow:none!important}& .askc.tint::before{display:none!important}
+@media (prefers-reduced-motion:reduce){& *{transition-duration:0s!important;animation-duration:0s!important;animation-delay:0s!important}}
+`;let st=A.nextElementSibling;if(!st||!st.hasAttribute||!st.hasAttribute('data-ace-skin')){st=doc.createElement('style');st.setAttribute('data-ace-skin',root);A.after(st)}
+const H='[data-skin=ace]'.repeat(4)+' '+root;st.textContent=(base+css).replace(/&&/g,H).replace(/&/g,P)}
+skin('.op',`
+& {--bg:var(--a-bone);--card:var(--a-ground);--fr:var(--a-ground);--rim:var(--a-stone);--l:var(--a-ink);--l2:var(--a-label);--l3:var(--a-label);--ln:var(--a-stone);--fe:var(--a-stone);--chip:transparent;--ph:var(--a-stone);--phb:var(--a-stone);--seg:transparent;--segOn:var(--a-ink);--bl:var(--a-emberT);--bls:var(--a-emberS);--ok:var(--a-ink);--oks:transparent;--or:var(--a-label);--ors:transparent;--wn:var(--a-label);--bad:var(--a-emberT);--bads:transparent;--red:var(--a-emberT);--reds:transparent;--sh:none}
+& .hd{gap:12px;padding-bottom:10px;border-bottom:1px solid var(--a-ink);align-items:flex-end}
+& .hd .ic{width:62px;height:36px;margin:-4px 0 -2px -3px;background:var(--a-logo) left center/contain no-repeat!important;box-shadow:none!important;color:transparent!important}& .hd .ic svg{display:none!important}
+& .hd .ttl{font-size:11px;line-height:14px;font-weight:500;letter-spacing:.08em;text-transform:uppercase;color:var(--a-label)}
+& button:focus-visible{box-shadow:none!important;outline:2px solid var(--a-ink)!important;outline-offset:2px}
+& .ace-cap{font-size:11px;line-height:14px;font-weight:500;letter-spacing:.08em;text-transform:uppercase;color:var(--a-label)}
+& .cts{font-size:13px;color:var(--a-label)}& .cts b{color:var(--a-ink);font-weight:600;font-size:15px;letter-spacing:-.03em}& .cts .r{color:var(--a-emberT)}
+& .sg{height:44px;padding:0;background:none;box-shadow:inset 0 -1px 0 var(--a-stone)}& .sg .th{top:auto;bottom:0;left:0;height:2px;width:calc(100%/3);background:var(--a-ink);box-shadow:none;transition:transform var(--a-b) var(--a-out)}
+& .sg button{font-size:11px;font-weight:500;letter-spacing:.08em;text-transform:uppercase;color:var(--a-label);height:44px!important}& .sg button.on{color:var(--a-ink)}& .sg small{font-size:11px;font-weight:500;color:var(--a-label);letter-spacing:0}
+& .ls{gap:0;margin:0;padding:0 0 14px}
+& .gh{font-size:11px;font-weight:500;letter-spacing:.08em;color:var(--a-label);padding:14px 0 6px}
+& .rw{background:var(--a-ground);box-shadow:inset 0 0 0 1px var(--a-stone);animation:aceRise var(--a-b) var(--a-out) both;transition:opacity var(--a-q),transform var(--a-b) var(--a-out)}& .rw+.rw{margin-top:-1px}@keyframes aceRise{from{transform:translateY(8px);opacity:0}}
+& .rw.open{box-shadow:inset 0 0 0 1px var(--a-ink);position:relative;z-index:1}
+& .rt{min-height:56px}
+& .ck{color:var(--a-ink)}& .ck i{width:18px;height:18px;box-shadow:inset 0 0 0 1.5px var(--a-ink);transition:background-color var(--a-q) var(--a-out),box-shadow var(--a-q) var(--a-out)}& .ck svg{transition:opacity var(--a-q),transform var(--a-b) var(--a-out)}
+& .rw.dn .ck{color:var(--a-ember)}& .rw.dn .ck i{background:var(--a-ember);box-shadow:none;color:var(--a-on)}
+& .tx b{font-size:15px;font-weight:500;letter-spacing:-.015em;line-height:20px}& .tx span{font-size:13px;color:var(--a-label)}& .rw.dn .tx b{color:var(--a-label);text-decoration-color:var(--a-label)}
+& .du{font-size:11px;font-weight:500;letter-spacing:.06em;text-transform:uppercase;padding:3px 6px;background:none;box-shadow:inset 0 0 0 1px var(--a-stone);color:var(--a-label)}& .du.r{color:var(--a-emberT);box-shadow:inset 0 0 0 1px var(--a-emberT)}& .du.o{color:var(--a-ink);box-shadow:inset 0 0 0 1px var(--a-ink)}
+& .ex{transition:grid-template-rows var(--a-b) var(--a-out)}& .xb p{font-size:15px;line-height:21px}& .meta{font-size:12px;color:var(--a-label)}
+& .pl button{min-height:44px!important;font-size:14px;font-weight:500;color:var(--a-ink);background:none!important;box-shadow:inset 0 0 0 1px var(--a-ink)!important}& .pl button.on{background:var(--a-ember)!important;color:var(--a-on);box-shadow:none!important}
+& .em{color:var(--a-label);font-size:15px}& .em b{font-size:22px;font-weight:600;letter-spacing:-.04em;color:var(--a-ink)}
+& .ft{background:var(--a-ground);box-shadow:inset 0 0 0 1px var(--a-ink);padding:4px 4px 4px 14px}& .ft .c{font-size:13px;color:var(--a-label)}
+& .go{height:46px!important;background:var(--a-ember)!important;color:var(--a-on);font-size:15px;font-weight:500;transition:transform var(--a-q) var(--a-out),filter var(--a-q)}& .go:active{transform:scale(.98);filter:brightness(.94)}
+& .snk{background:var(--a-ink);color:var(--a-bone);box-shadow:none;animation:aceRise var(--a-b) var(--a-out)}& .snk button{color:var(--a-bone);text-decoration:underline;text-underline-offset:3px}
+@media (max-width:440px){& .cts{padding-left:0}}
+& .hd{display:grid;grid-template-columns:auto 1fr auto;grid-template-areas:"ic ttl ct" "cts cts ct";align-items:end;column-gap:12px;row-gap:6px}
+& .hd .ic{grid-area:ic}& .hd .ttl{grid-area:ttl;align-self:end}& .cts{grid-area:cts;text-align:left;padding:0!important}
+& .ct{grid-area:ct;align-items:flex-end;gap:10px;color:var(--a-label);margin:0}& .ct .k{display:flex;align-items:baseline;gap:3px}
+& .ct .n{font-size:44px;line-height:38px;font-weight:600;letter-spacing:-.06em;color:var(--a-ink)}& .ct .of{font-size:15px;font-weight:500;letter-spacing:-.02em}& .ofw{display:none}& .ofs{display:inline}
+& .rg{width:26px;height:26px;margin-bottom:5px}& .rg circle{stroke-width:3}& .rg .t{stroke:var(--a-stone)}& .rg .v{stroke:var(--a-ember);stroke-linecap:butt;transition:stroke-dashoffset var(--a-b) var(--a-out)}
+& .gh span[data-gc]{letter-spacing:0;margin-left:auto}& .gh{display:flex}
+& .ud{background:var(--a-ember);margin:0 6px}
+@media (max-width:440px){& .cts{padding-left:0}}`);
+/*SKIN:END*/const SP='cubic-bezier(.32,.72,0,1)';
 const css=`.op{--bg:#f2f3f7;--card:rgba(255,255,255,.78);--rim:rgba(255,255,255,.9);--l:#0b0b0c;--l2:rgba(30,30,38,.66);--l3:rgba(30,30,38,.42);--ln:rgba(0,0,0,.07);--chip:rgba(118,118,128,.12);--seg:rgba(118,118,128,.12);--segOn:#fff;--bl:#007aff;--bls:rgba(0,122,255,.1);--ok:#1f9d55;--red:#e5372b;--reds:rgba(229,55,43,.11);--or:#c96a00;--ors:rgba(255,149,0,.14);--sh:0 6px 20px rgba(20,30,70,.08);
 font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif;background:var(--bg);color:var(--l);border-radius:24px;padding:16px;display:flex;flex-direction:column;gap:12px;overflow:hidden;width:100%;min-width:0;box-sizing:border-box;position:relative;-webkit-font-smoothing:antialiased;isolation:isolate}
 .op::before{content:"";position:absolute;inset:-40% -20% auto;height:280px;z-index:-1;background:radial-gradient(60% 60% at 20% 30%,rgba(120,150,255,.22),transparent 70%),radial-gradient(50% 60% at 85% 20%,rgba(255,170,120,.18),transparent 70%);pointer-events:none}
@@ -24,6 +83,9 @@ font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif;
 .op .mn{flex:1;display:flex!important;align-items:center;gap:10px;padding:8px 0!important;min-height:44px!important}.op .tx{flex:1;display:flex;flex-direction:column;gap:2px}
 .op .tx b{font-size:14px;font-weight:600;line-height:1.35;color:var(--l);overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;transition:color .25s}.op .tx span{font-size:13px;line-height:1.35;color:var(--l2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .op .rw.dn .tx b{text-decoration:line-through;text-decoration-color:var(--l3);color:var(--l3)}.op .rw.dn .tx span{opacity:.6}
+.op .ct{margin-left:auto;display:flex;align-items:center;gap:7px;font-size:13px;font-weight:600;color:var(--l2);font-variant-numeric:tabular-nums;white-space:nowrap;flex:none}.op .ct .n{color:var(--l);font-weight:700}.op .ofs{display:none}.op .ct+.cts{flex-basis:100%;text-align:left;padding-left:42px}.op .hd{flex-wrap:wrap;row-gap:4px}
+.op .rg{width:26px;height:26px;transform:rotate(-90deg)}.op .rg circle{fill:none;stroke-width:3.5}.op .rg .t{stroke:var(--chip)}.op .rg .v{stroke:var(--ok);stroke-linecap:round;stroke-dasharray:69.1;stroke-dashoffset:calc(69.1 * (1 - var(--p,0)));transition:stroke-dashoffset .5s ${SP}}
+.op .ud{width:7px;height:7px;border-radius:50%;background:var(--red);flex:none;margin:0 6px}.op .rw.dn .ud,.op .rw.dn .du{opacity:.4}
 .op .du{flex:none;font-size:12px;font-weight:600;padding:3px 8px;border-radius:999px;background:var(--chip);color:var(--l2);white-space:nowrap;font-variant-numeric:tabular-nums}.op .du.r{background:var(--reds);color:var(--red)}.op .du.o{background:var(--ors);color:var(--or)}
 .op .ex{display:grid;grid-template-rows:0fr;transition:grid-template-rows .45s ${SP}}.op .rw.open .ex{grid-template-rows:1fr}.op .ex>div{overflow:hidden}
 .op .xb{padding:0 14px 14px 46px;display:flex;flex-direction:column;gap:8px}.op .xb p{margin:0;font-size:14px;line-height:1.5;color:var(--l);white-space:pre-wrap;overflow-wrap:anywhere}.op .meta{font-size:12px;color:var(--l3);overflow-wrap:anywhere}
@@ -43,35 +105,39 @@ const t0=(()=>{const n=new Date();return Date.UTC(n.getFullYear(),n.getMonth(),n
 const dd=s=>{const m=/^(\d{4})-(\d\d)-(\d\d)/.exec(s||'');return m?Math.round((Date.UTC(+m[1],m[2]-1,+m[3])-t0)/864e5):null};
 const dl=s=>{const n=dd(s);if(n==null)return'';if(n<0)return`Overdue ${-n}d`;if(n==0)return'Today';if(n==1)return'Tomorrow';const d=new Date(t0+n*864e5);return`${WD[d.getUTCDay()]} ${MO[d.getUTCMonth()]} ${d.getUTCDate()}`};
 const dc=s=>{const n=dd(s);return n==null?'':n<=1?' r':n<=3?' o':''};
-const onMe=x=>x.who=='Ace'&&x.status!='waiting';
-const IT=(D.items||[]).map(x=>({...x}));let flt='me',open=null,done=new Set(),ans={},snk=null;
-const vis=()=>IT.filter(x=>flt=='all'||(flt=='me'?onMe(x):!onMe(x)));
+const onMe=x=>x.who=='Ace'&&x.status!='waiting';const ME=(D.me||[]).flatMap(g=>g.items||[]),MEID=new Set(ME.map(x=>x.id)),HASME=!!D.me;
+const IT=(D.items||[]).map(x=>({...x}));const ALL=[...IT.map(x=>{const m=ME.find(y=>y.id==x.id);return m?{...x,title:m.title}:x}),...ME.filter(x=>!IT.some(y=>y.id==x.id)).map(x=>({...x,who:'Ace',status:'open'}))];const byId=id=>ME.find(x=>x.id==id)||ALL.find(x=>x.id==id);let flt='me',open=null,done=new Set(),ans={},snk=null;
+const isMe=x=>HASME?MEID.has(x.id):onMe(x);const vis=()=>(flt=='all'?ALL:IT).filter(x=>flt=='all'||(flt=='me'?isMe(x):!isMe(x)));
 const grp=x=>{const n=dd(x.due);return n!=null&&n<=0?0:n!=null&&n<=6?1:2};
-function counts(){const me=IT.filter(onMe).length,ln=IT.length-me,tm=IT.filter(x=>dd(x.due)==1).length,od=IT.filter(x=>{const n=dd(x.due);return n!=null&&n<0}).length,td=IT.filter(x=>dd(x.due)==0).length;
+function counts(){const me=HASME?ME.length:IT.filter(onMe).length,ln=IT.filter(x=>!isMe(x)).length,tm=IT.filter(x=>dd(x.due)==1).length,od=IT.filter(x=>{const n=dd(x.due);return n!=null&&n<0}).length,td=IT.filter(x=>dd(x.due)==0).length;
 return[`<b>${me}</b> on you`,`<b>${ln}</b> on lanes`,od?`<span class="r"><b>${od}</b> overdue</span>`:'',td?`<b>${td}</b> due today`:'',tm?`<span class="x"><b>${tm}</b> due tomorrow</span>`:''].filter(Boolean).join(' · ')}
-function row(x,i){const acts=(x.action||'').split(' / ').map(s=>s.trim()).filter(Boolean),d=done.has(x.id),o=open==x.id;
-return`<div class="rw${d?' dn':''}${o?' open':''}" data-id="${e(x.id)}" style="animation-delay:${Math.min(i,8)*30}ms"><div class="rt"><button class="ck" data-ck aria-label="${d?'Mark not done':'Mark done'}: ${e(x.title)}" aria-pressed="${d}"><i>${I('chk',16)}</i></button>
-<button class="mn" data-op aria-expanded="${o}"><span class="tx"><b>${e(x.title)}</b><span>${e(x.status=='waiting'?'Waiting on '+(x.who=='Ace'?'reply':x.who):(x.detail||x.area||''))}</span></span>${x.due?`<span class="du${dc(x.due)}">${e(dl(x.due))}</span>`:''}</button></div>
+function row(x,i,gi){const acts=(x.action||'').split(' / ').map(s=>s.trim()).filter(Boolean),d=done.has(x.id),o=open==x.id,td='chip' in x;
+return`<div class="rw${d?' dn':''}${o?' open':''}" data-id="${e(x.id)}"${gi!=null?` data-g="${gi}"`:''} style="animation-delay:${Math.min(i,8)*30}ms"><div class="rt"><button class="ck" data-ck aria-label="${d?'Mark not done':'Mark done'}: ${e(x.title)}" aria-pressed="${d}"><i>${I('chk',16)}</i></button>
+<button class="mn" data-op aria-expanded="${o}"><span class="tx"><b>${e(x.title)}</b>${td?(x.sub?`<span>${e(x.sub)}</span>`:''):`<span>${e(x.status=='waiting'?'Waiting on '+(x.who=='Ace'?'reply':x.who):(x.detail||x.area||''))}</span>`}</span>${td?(x.chip?`<span class="du${x.urgent?' r':''}">${e(x.chip)}</span>`:x.urgent?'<span class="ud" role="img" aria-label="Urgent"></span>':''):x.due?`<span class="du${dc(x.due)}">${e(dl(x.due))}</span>`:''}</button></div>
 <div class="ex"><div><div class="xb">${x.detail?`<p>${e(x.detail)}</p>`:''}${acts.length?`<div class="pl">${acts.map(a=>`<button data-a="${e(a)}" class="${ans[x.id]==a?'on':''}" aria-pressed="${ans[x.id]==a}"><span>${e(a)}</span></button>`).join('')}</div>`:''}<span class="meta">${e([x.area,x.who!='Ace'?'on '+x.who:'',x.money?'money':'',x.source].filter(Boolean).join(' · '))}</span></div></div></div></div>`}
-function list(){const v=vis();if(!v.length)return`<div class="em"><b>${flt=='me'?'Nothing on you':'Nothing open'}</b>${flt=='me'?'Everything left is with the lanes.':'All clear.'}</div>`;
+function list(){if(flt=='me'&&HASME){if(!ME.length)return`<div class="em"><b>Nothing on you</b>Everything left is with the lanes.</div>`;let i=0;return D.me.map((g,gi)=>`<div class="gh">${e(g.title)} <span data-gc="${gi}">${g.items.filter(x=>done.has(x.id)).length}/${g.items.length}</span></div>`+g.items.map(x=>row(x,i++,gi)).join('')).join('')}
+const v=vis();if(!v.length)return`<div class="em"><b>${flt=='me'?'Nothing on you':'Nothing open'}</b>${flt=='me'?'Everything left is with the lanes.':'All clear.'}</div>`;
 const G=[[],[],[]];v.forEach(x=>G[grp(x)].push(x));let i=0;return['Today','This week','Later'].map((n,k)=>G[k].length?`<div class="gh">${n} <span>${G[k].length}</span></div>`+G[k].map(x=>row(x,i++)).join(''):'').join('')}
 const nUp=()=>done.size+Object.keys(ans).filter(k=>!done.has(k)).length;
-function render(){const n=nUp(),cm=IT.filter(onMe).length,cl=IT.length-cm,ix={me:0,lanes:1,all:2}[flt],st=A.querySelector('.ls'),top=st?st.scrollTop:0;
-A.innerHTML=`<style>${css}</style><div class="op"><div class="hd"><span class="ic">${I('list',18)}</span><span class="ttl">Concierge · Open</span><span class="cts">${counts()}</span></div>
-<div class="sg" role="tablist"><span class="th" style="transform:translateX(${ix*100}%)"></span>${[['me','On me',cm],['lanes','Lanes',cl],['all','All',IT.length]].map(([k,l,c])=>`<button role="tab" data-f="${k}" class="${flt==k?'on':''}" aria-selected="${flt==k}">${l} <small>${c}</small></button>`).join('')}</div>
+function ring(){const k=ME.filter(x=>done.has(x.id)).length,N=ME.length;return`<span class="ct" aria-label="${k} of ${N} done"><span class="k"><span class="n">${k}</span><span class="of"><span class="ofw"> of </span><span class="ofs">/</span>${N}</span></span><svg class="rg" viewBox="0 0 30 30" aria-hidden="true" style="--p:${N?k/N:0}"><circle class="t" cx="15" cy="15" r="11"/><circle class="v" cx="15" cy="15" r="11"/></svg></span>`}
+function render(){const n=nUp(),cm=HASME?ME.length:IT.filter(onMe).length,cl=IT.filter(x=>!isMe(x)).length,ix={me:0,lanes:1,all:2}[flt],st=A.querySelector('.ls'),top=st?st.scrollTop:0;
+A.innerHTML=`<style>${css}</style><div class="op"><div class="hd"><span class="ic">${I('list',18)}</span><span class="ttl">Concierge · Open</span>${HASME?ring():''}<span class="cts">${counts()}</span></div>
+<div class="sg" role="tablist"><span class="th" style="transform:translateX(${ix*100}%)"></span>${[['me','On me',cm],['lanes','Lanes',cl],['all','All',ALL.length]].map(([k,l,c])=>`<button role="tab" data-f="${k}" class="${flt==k?'on':''}" aria-selected="${flt==k}">${l} <small>${c}</small></button>`).join('')}</div>
 <div class="ls">${list()}</div>
 <div class="ft"><span class="c">${n?`${done.size} done · ${n-done.size} answered`:'Check off or answer items'}</span><button class="go" id="go"${n?'':' disabled'}>Send ${n||''} update${n==1?'':'s'} ↗</button></div></div>`;
 const l=A.querySelector('.ls');if(l)l.scrollTop=top;bind()}
 function bind(){const R=A.querySelector('.op');R.querySelectorAll('[data-f]').forEach(b=>b.onclick=()=>{if(flt==b.dataset.f)return;flt=b.dataset.f;open=null;R.querySelector('.th').style.transform=`translateX(${{me:0,lanes:1,all:2}[flt]*100}%)`;setTimeout(()=>{A.querySelector('.ls')&&(A.querySelector('.ls').scrollTop=0);render()},180)});
-R.querySelectorAll('.rw').forEach(r=>{const id=r.dataset.id,x=IT.find(y=>y.id==id);
+R.querySelectorAll('.rw').forEach(r=>{const id=r.dataset.id,x=byId(id);
 r.querySelector('[data-op]').onclick=()=>{const was=open==id;R.querySelectorAll('.rw.open').forEach(o=>{o.classList.remove('open');o.querySelector('[data-op]').setAttribute('aria-expanded','false')});open=was?null:id;if(!was){r.classList.add('open');r.querySelector('[data-op]').setAttribute('aria-expanded','true')}};
 r.querySelector('[data-ck]').onclick=()=>{if(done.has(id)){done.delete(id);r.classList.remove('dn');foot();return}done.add(id);r.classList.add('dn');foot();snack(`Done: ${x.title}`,()=>{done.delete(id);const q=A.querySelector(`.rw[data-id="${CSS.escape(id)}"]`);if(q)q.classList.remove('dn');foot()})};
 r.querySelectorAll('[data-a]').forEach(b=>b.onclick=()=>{const a=b.dataset.a;if(ans[id]==a)delete ans[id];else ans[id]=a;r.querySelectorAll('[data-a]').forEach(p=>{const on=ans[id]==p.dataset.a;p.classList.toggle('on',on);p.setAttribute('aria-pressed',on)});foot()})});
 R.querySelector('#go').onclick=send}
-function foot(){const n=nUp(),f=A.querySelector('.ft');if(!f)return;f.querySelector('.c').textContent=n?`${done.size} done · ${n-done.size} answered`:'Check off or answer items';const g=f.querySelector('#go');g.disabled=!n;g.textContent=`Send ${n||''} update${n==1?'':'s'} ↗`}
+function tally(){const R=A.querySelector('.op');if(!R||!HASME)return;const c=R.querySelector('.ct');if(c){const k=ME.filter(x=>done.has(x.id)).length;c.querySelector('.n').textContent=k;c.setAttribute('aria-label',k+' of '+ME.length+' done');c.querySelector('.rg').style.setProperty('--p',ME.length?k/ME.length:0)}
+R.querySelectorAll('[data-gc]').forEach(el=>{const g=D.me[+el.dataset.gc];el.textContent=g.items.filter(x=>done.has(x.id)).length+'/'+g.items.length})}
+function foot(){tally();const n=nUp(),f=A.querySelector('.ft');if(!f)return;f.querySelector('.c').textContent=n?`${done.size} done · ${n-done.size} answered`:'Check off or answer items';const g=f.querySelector('#go');g.disabled=!n;g.textContent=`Send ${n||''} update${n==1?'':'s'} ↗`}
 function snack(t,undo){if(snk){clearTimeout(snk.t);snk.el.remove()}const R=A.querySelector('.op'),s=document.createElement('div');s.className='snk';s.setAttribute('role','status');s.innerHTML=`<span>${e(t)}</span>${undo?'<button>Undo</button>':''}`;R.appendChild(s);
 const bye=()=>{s.remove();snk=null};const ub=s.querySelector('button');if(ub)ub.onclick=()=>{clearTimeout(snk&&snk.t);bye();undo()};snk={el:s,t:setTimeout(bye,4500)}}
-function send(){const L=[];IT.forEach(x=>{if(done.has(x.id))L.push(`done: ${x.title} [${x.id}]`);else if(ans[x.id])L.push(`${x.title} [${x.id}]: ${ans[x.id]}`)});if(!L.length)return;
+function send(){const L=[];ALL.forEach(x=>{if(done.has(x.id))L.push(`done: ${x.title} [${x.id}]`);else if(ans[x.id])L.push(`${x.title} [${x.id}]: ${ans[x.id]}`)});if(!L.length)return;
 sendPrompt('Open updates: '+L.join('; ')+'. Update open.json and the lane needs files.');done.clear();ans={};render();snack('Updates sent to chat',null)}
 render();
 /* Ask Concierge bar (standard in every Concierge widget): one-line pill at the bottom of the card. The arrow shows once there is text;
