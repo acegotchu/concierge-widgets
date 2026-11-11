@@ -33,6 +33,19 @@ font-family:"Inter Tight",Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI"
 @media (prefers-reduced-motion:reduce){& *{transition-duration:0s!important;animation-duration:0s!important;animation-delay:0s!important}}
 `;let st=A.nextElementSibling;if(!st||!st.hasAttribute||!st.hasAttribute('data-ace-skin')){st=doc.createElement('style');st.setAttribute('data-ace-skin',root);A.after(st)}
 const H='[data-skin=ace]'.repeat(4)+' '+root;st.textContent=(base+css).replace(/&&/g,H).replace(/&/g,P)}
+/* Synced stamp (both themes): "Synced 10:40 AM ET" under the header, from D.synced = {at: ISO, tz, tzLabel, staleHours,
+ sources: [{label, at|null}]}. Older than staleHours, or any source unchecked, it says so: "Synced 9:02 AM ET · Work and
+ School not checked" (labels come from the data). Purely a label: no behavior and no sendPrompt change. Re-attached after every re-render. */
+function stampSync(anchor,mode){const S=D.synced;if(!S||!S.at)return;const doc=A.ownerDocument;
+if(!doc.getElementById('cz-sync-css')){const c=doc.createElement('style');c.id='cz-sync-css';c.textContent='.cz-sync{display:block;font-size:11px;line-height:14px;font-weight:500;letter-spacing:0;color:inherit;opacity:.58;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin:-4px 0 0;font-variant-numeric:tabular-nums}.cz-sync.in{margin:2px 0 0}.cz-sync.warn{opacity:1;color:#c2410c}@media (prefers-color-scheme:dark){.cz-sync.warn{color:#ff9f6b}}[data-skin=ace] .cz-sync{letter-spacing:.02em;opacity:1;color:var(--a-label)}[data-skin=ace] .cz-sync.warn{color:var(--a-emberT)}[data-skin=ace] .fy .hero .cz-sync{color:rgba(242,238,230,.7)}[data-skin=ace] .fy .hero .cz-sync.warn{color:#E7A98C}';(A.getRootNode&&A.getRootNode().head?A.getRootNode().head:doc.head||A.parentNode).appendChild(c)}
+const tz=S.tz||'America/New_York',tl=S.tzLabel||'ET',d=new Date(S.at);if(isNaN(d))return;let t;try{t=new Intl.DateTimeFormat('en-US',{timeZone:tz,hour:'numeric',minute:'2-digit'}).format(d)}catch(_){t=d.toLocaleTimeString([],{hour:'numeric',minute:'2-digit'})}
+const miss=(S.sources||[]).filter(s=>!s.at).map(s=>s.label),old=(Date.now()-d.getTime())/36e5>(S.staleHours||2);
+const and=a=>a.length<2?a.join(''):a.slice(0,-1).join(', ')+' and '+a[a.length-1];
+const txt='Synced '+t+' '+tl+(miss.length?' · '+and(miss)+' not checked':old?' · '+Math.floor((Date.now()-d.getTime())/36e5)+'h ago':'');
+const put=()=>{const a=A.querySelector(anchor);if(!a)return;const inside=mode=='in',host=inside?a:a.parentNode;if(!host)return;
+let el=host.querySelector(':scope>.cz-sync');if(el&&(inside?el.parentNode===a:el.previousElementSibling===a))return;if(el)el.remove();
+el=doc.createElement('span');el.className='cz-sync'+(inside?' in':'')+(miss.length||old?' warn':'');el.textContent=txt;el.title=(S.sources||[]).map(s=>s.label+': '+(s.at?'checked':'not checked')).join(' · ');
+inside?a.appendChild(el):a.after(el)};new MutationObserver(put).observe(A,{childList:true,subtree:true});put()}
 skin('.gm',`
 & {--bg:var(--a-bone);--card:var(--a-ground);--fr:var(--a-ground);--rim:var(--a-stone);--l:var(--a-ink);--l2:var(--a-label);--l3:var(--a-label);--ln:var(--a-stone);--fe:var(--a-stone);--chip:transparent;--ph:var(--a-stone);--phb:var(--a-stone);--seg:transparent;--segOn:var(--a-ink);--bl:var(--a-emberT);--bls:var(--a-emberS);--ok:var(--a-ink);--oks:transparent;--or:var(--a-label);--ors:transparent;--wn:var(--a-label);--bad:var(--a-emberT);--bads:transparent;--red:var(--a-emberT);--reds:transparent;--sh:none}
 & .hd{gap:12px;padding-bottom:10px;border-bottom:1px solid var(--a-ink);align-items:flex-end}
@@ -73,7 +86,7 @@ skin('.gm',`
 & .sv .dy.td{color:var(--a-emberT)}& .sv .dy.on::before{background:var(--a-ember)}
 & .sv .of span{background:var(--a-ground);color:var(--a-label)}& .sv .of input,& .sv .pk input{box-shadow:inset 0 0 0 1px var(--a-stone)}& .sv .of input:focus,& .sv .pk input:focus{box-shadow:inset 0 0 0 1.5px var(--a-ink)}& .sv .of:focus-within span{color:var(--a-ink)}
 & .sv .pb button{color:var(--a-ink);font-weight:500}& .sv .pb .pr{background:var(--a-ember)!important;color:var(--a-on)}
-& .vw.in-r{animation:aceInR var(--a-b) var(--a-out)}& .vw.in-l{animation:aceInL var(--a-b) var(--a-out)}@keyframes aceInR{from{transform:translateX(16px);opacity:0}}@keyframes aceInL{from{transform:translateX(-16px);opacity:0}}`);
+& .vw.in-r{animation:aceInR var(--a-b) var(--a-out)}& .vw.in-l{animation:aceInL var(--a-b) var(--a-out)}@keyframes aceInR{from{transform:translateX(16px);opacity:0}}@keyframes aceInL{from{transform:translateX(-16px);opacity:0}}`);stampSync('.tb','after');
 /*SKIN:END*/const SP='cubic-bezier(.32,.72,0,1)';
 const css=`.gm{--bg:#fff;--pop:#fff;--tx:#1f1f1f;--t2:#444746;--t3:#5f6368;--ln:#e0e3e7;--ol:#c4c7c5;--ac:#0b57d0;--acT:#fff;--acH:#0842a0;--hv:rgba(68,71,70,.08);--pill:#e9eef6;--fld:#f6f8fc;--sb:#1f1f1f;--sbT:#f2f2f2;--sbA:#a8c7fa;--bad:#b3261e;--sh:0 1px 2px rgba(60,64,67,.3),0 2px 6px 2px rgba(60,64,67,.15);
 --lgB:#c6efd4;--lgT:#0d652d;--lbB:#d3e3fd;--lbT:#0842a0;--lrB:#fad2cf;--lrT:#a50e0e;--loB:#feefc3;--loT:#7a4a00;--lpB:#e8def8;--lpT:#4a2c8a;--lnB:#e8eaed;--lnT:#3c4043;
