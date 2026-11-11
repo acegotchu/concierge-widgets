@@ -5,7 +5,56 @@
    lanes:[{lane,model,state:"working"|"idle",task,fit:"ok"|"over"|"under",ideal,note}],      // ideal = the model the rule picks for that task
    tips:[{title,detail,action,prompt}]}                                                        // action = button text, prompt = sent to chat on tap
  Rule: Haiku for scraping, Sonnet for writing, Opus only for builds and heavy research. Ask bar: "[Usage] …". */
-(function(){const D=window.D,A=document.getElementById('app')||(()=>{const s=document.currentScript,r=s&&s.getRootNode?s.getRootNode():null;let a=r&&r.querySelector?r.querySelector('#app'):null;if(!a&&s&&s.parentNode){a=document.createElement('div');a.id='app';s.parentNode.insertBefore(a,s)}return a})();if(!A||!D){if(A)A.textContent='Concierge widget: window.D is missing.';return}const SP='cubic-bezier(.32,.72,0,1)';
+(function(){const D=window.D,A=document.getElementById('app')||(()=>{const s=document.currentScript,r=s&&s.getRootNode?s.getRootNode():null;let a=r&&r.querySelector?r.querySelector('#app'):null;if(!a&&s&&s.parentNode){a=document.createElement('div');a.id='app';s.parentNode.insertBefore(a,s)}return a})();if(!A||!D){if(A)A.textContent='Concierge widget: window.D is missing.';return}
+/*SKIN:BEGIN*/
+/* Theme layer (shared; synced into every template by _skin/sync.py). The default is the Concierge look and needs nothing.
+ window.D.theme="ace" (or data-theme="ace" on #app) adds the ace skin: the acegotchu.com direction F look (bone and ink, one ember
+ accent, Inter Tight, sharp corners, flat with grain). The skin is one <style> placed right after #app, scoped to [data-skin=ace],
+ so it survives re-renders and every behavior stays the template's own. The signature loads from D.logo (D.logoLight for dark grounds), else ace-logo.png
+ and ace-logo-light.png next to the template script; with neither, headers fall back to the title alone. A new theme = a new CSS file per template. */
+const SKIN=String(D.theme||A.getAttribute('data-theme')||'').toLowerCase(),SKIN_SRC=(()=>{try{const s=document.currentScript;return s&&s.src?s.src.replace(/[^\/?#]*([?#].*)?$/,''):''}catch(e){return ''}})();
+function skin(root,css){if(SKIN!=='ace')return;A.setAttribute('data-skin','ace');
+const doc=A.ownerDocument;if(!doc.querySelector('link[data-ace-font]')){const l=doc.createElement('link');l.rel='stylesheet';l.href='https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700&display=swap';l.setAttribute('data-ace-font','');doc.head.appendChild(l)}
+const logo=D.logo||(SKIN_SRC?SKIN_SRC+'ace-logo.png':''),logoL=D.logoLight||(SKIN_SRC?SKIN_SRC+'ace-logo-light.png':logo),P='[data-skin=ace] '+root,G="url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 .07 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E\")";
+const base=`& {--a-bone:#F2EEE6;--a-ground:#FFFFFF;--a-stone:#E2DED7;--a-ink:#111111;--a-label:#6F6B65;--a-ember:#9C4A2B;--a-emberT:#9C4A2B;--a-emberS:rgba(156,74,43,.10);--a-on:#FFFFFF;--a-q:200ms;--a-b:320ms;--a-out:cubic-bezier(.2,0,0,1);--a-logoD:${logo?`url("${logo}")`:'none'};--a-logoL:${logoL?`url("${logoL}")`:'none'};--a-logo:var(--a-logoD);--a-grain:${G};
+font-family:"Inter Tight",Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif!important;letter-spacing:-.01em;color:var(--a-ink)!important;background:var(--a-grain),var(--a-bone)!important;border-radius:0!important;box-shadow:none!important;-webkit-font-smoothing:antialiased}
+@media (prefers-color-scheme:dark){& {--a-bone:#111111;--a-ground:#1A1917;--a-stone:#2D2B28;--a-ink:#F2EEE6;--a-label:#9F998F;--a-emberT:#DB8D6B;--a-emberS:rgba(219,141,107,.14);--a-logo:var(--a-logoL)}}
+& ::before,& ::after{text-shadow:none}& >::before,& >::after,&::before,&::after{display:none!important}
+&& *,&&{border-radius:0!important;-webkit-backdrop-filter:none!important;backdrop-filter:none!important;text-shadow:none!important;font-family:inherit}
+& .ace-n{font-weight:600!important;letter-spacing:-.05em!important;font-variant-numeric:tabular-nums}
+& .askc{--aT:var(--a-ink);--aP:var(--a-label);--aA:var(--a-ember);height:48px;background:var(--a-ground)!important;box-shadow:inset 0 0 0 1px var(--a-stone)!important;font-family:inherit}
+& .askc:focus-within{box-shadow:inset 0 0 0 1px var(--a-ink)!important}& .askc input{font-size:15px;letter-spacing:-.01em;height:48px;font-family:inherit}& .askc.askc .go{height:48px!important;background:none!important}
+& .askc .go i{width:30px;height:30px;background:var(--a-ember)!important;box-shadow:none!important}& .askc.tint::before{display:none!important}
+@media (prefers-reduced-motion:reduce){& *{transition-duration:0s!important;animation-duration:0s!important;animation-delay:0s!important}}
+`;let st=A.nextElementSibling;if(!st||!st.hasAttribute||!st.hasAttribute('data-ace-skin')){st=doc.createElement('style');st.setAttribute('data-ace-skin',root);A.after(st)}
+const H='[data-skin=ace]'.repeat(4)+' '+root;st.textContent=(base+css).replace(/&&/g,H).replace(/&/g,P)}
+skin('.us',`
+& {--bg:var(--a-bone);--card:var(--a-ground);--fr:var(--a-ground);--rim:var(--a-stone);--l:var(--a-ink);--l2:var(--a-label);--l3:var(--a-label);--ln:var(--a-stone);--fe:var(--a-stone);--chip:transparent;--ph:var(--a-stone);--phb:var(--a-stone);--seg:transparent;--segOn:var(--a-ink);--bl:var(--a-emberT);--bls:var(--a-emberS);--ok:var(--a-ink);--oks:transparent;--or:var(--a-label);--ors:transparent;--wn:var(--a-label);--bad:var(--a-emberT);--bads:transparent;--red:var(--a-emberT);--reds:transparent;--sh:none}
+& .hd{gap:12px;padding-bottom:10px;border-bottom:1px solid var(--a-ink);align-items:flex-end}
+& .hd .ic{width:62px;height:36px;margin:-4px 0 -2px -3px;background:var(--a-logo) left center/contain no-repeat!important;box-shadow:none!important;color:transparent!important}& .hd .ic svg{display:none!important}
+& .hd .ttl{font-size:11px;line-height:14px;font-weight:500;letter-spacing:.08em;text-transform:uppercase;color:var(--a-label)}
+& button:focus-visible{box-shadow:none!important;outline:2px solid var(--a-ink)!important;outline-offset:2px}
+& .ace-cap{font-size:11px;line-height:14px;font-weight:500;letter-spacing:.08em;text-transform:uppercase;color:var(--a-label)}
+& .upd{font-size:12px;color:var(--a-label)}
+& .hl{background:none;box-shadow:none;border-left:3px solid var(--c);padding:6px 0 6px 12px;font-size:17px;font-weight:500;letter-spacing:-.02em;line-height:23px}& .hl i{display:none}
+& .hl.ok{--c:var(--a-ink)}& .hl.warn{--c:var(--a-label)}& .hl.bad{--c:var(--a-ember)}
+& .mt{gap:0;border-top:1px solid var(--a-stone);border-left:1px solid var(--a-stone)}& .m{background:none;box-shadow:none;border-right:1px solid var(--a-stone);border-bottom:1px solid var(--a-stone);padding:14px 10px 12px}
+& .m.ok{--c:var(--a-ink)}& .m.warn{--c:var(--a-label)}& .m.bad{--c:var(--a-ember)}
+& .rg .t{stroke:var(--a-stone)}& .rg circle{stroke-width:4}& .rg .v{stroke-linecap:butt;animation-duration:var(--a-b);animation-timing-function:var(--a-out)}
+& .rg b{font-size:19px;font-weight:600;letter-spacing:-.05em}& .m.bad .rg b{color:var(--a-emberT)}
+& .m .lb{font-size:11px;line-height:14px;font-weight:500;letter-spacing:.08em;text-transform:uppercase;color:var(--a-label)}& .m .sb{font-size:13px;color:var(--a-ink)}& .m .rs{font-size:12px;color:var(--a-label)}
+& .sec{background:var(--a-ground);box-shadow:none;border:1px solid var(--a-stone);padding:12px}
+& .st{font-size:11px;font-weight:500;letter-spacing:.08em;color:var(--a-label)}& .st span{color:var(--a-label);font-weight:500}
+& .ln{border-top-color:var(--a-stone)}& .nm b{font-size:15px;font-weight:500;letter-spacing:-.015em}& .nm span{font-size:12px;color:var(--a-label)}
+& .dot{width:7px;height:7px;background:var(--a-stone)}& .dot.on{background:var(--a-ember);box-shadow:none}
+& .md{font-size:11px;font-weight:500;letter-spacing:.06em;text-transform:uppercase;padding:3px 6px;background:none;box-shadow:inset 0 0 0 1px var(--a-ink)}
+& .ft{font-size:12px;font-weight:500}& .ft.ok{--c:var(--a-label)}& .ft.over{--c:var(--a-emberT)}& .ft.under{--c:var(--a-emberT)}
+& .tp{border-top-color:var(--a-stone)}& .tp .n{width:auto;height:auto;background:none;font-size:22px;font-weight:600;letter-spacing:-.05em;color:var(--a-ink);min-width:20px}
+& .tp .t b{font-size:15px;font-weight:500;letter-spacing:-.015em}& .tp .t span{font-size:13px;color:var(--a-label)}
+& .tp button{background:var(--a-ember)!important;color:var(--a-on);font-weight:500;min-height:44px!important;transition:transform var(--a-q) var(--a-out),filter var(--a-q)}& .tp button:active{transform:scale(.98);filter:brightness(.94)}& .tp button.sent{background:none!important;box-shadow:inset 0 0 0 1px var(--a-stone)!important;color:var(--a-label)}
+& .em{color:var(--a-label)}
+& .m.na{--c:var(--a-stone)}& .m.na .rg b{font-size:16px;letter-spacing:-.02em;color:var(--a-label)}& .md.ns{box-shadow:inset 0 0 0 1px var(--a-stone);color:var(--a-label)}& .ft.na{--c:var(--a-label)}`);
+/*SKIN:END*/const SP='cubic-bezier(.32,.72,0,1)';
 const css=`.us{--bg:#f2f3f7;--card:rgba(255,255,255,.74);--rim:rgba(255,255,255,.95);--l:#0b0b0c;--l2:rgba(30,30,38,.64);--l3:rgba(30,30,38,.4);--ln:rgba(0,0,0,.07);--ph:rgba(118,118,128,.12);--sh:0 8px 24px rgba(20,30,70,.09);--bl:#007aff;--ok:#1f9d55;--wn:#c77700;--bad:#e5372b;
 font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif;background:var(--bg);color:var(--l);border-radius:24px;padding:16px;display:flex;flex-direction:column;gap:12px;width:100%;min-width:0;box-sizing:border-box;position:relative;isolation:isolate;overflow:hidden;-webkit-font-smoothing:antialiased}
 .us::before{content:"";position:absolute;inset:-30% -30% auto -30%;height:380px;z-index:-1;pointer-events:none;background:radial-gradient(40% 50% at 18% 40%,rgba(255,159,10,.16),transparent 70%),radial-gradient(45% 55% at 82% 25%,rgba(10,132,255,.18),transparent 70%)}
@@ -24,7 +73,7 @@ font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif;
 .us .nm{display:flex;flex-direction:column;gap:1px}.us .nm b{display:flex;align-items:center;gap:7px;font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.us .nm span{font-size:12px;color:var(--l2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .us .dot{width:8px;height:8px;border-radius:50%;flex:none;background:var(--l3)}.us .dot.on{background:var(--ok);box-shadow:0 0 0 3px color-mix(in srgb,var(--ok) 22%,transparent)}
 .us .md{font-size:12px;font-weight:700;padding:4px 9px;border-radius:999px;background:var(--ph);white-space:nowrap}
-.us .ft{display:flex;align-items:center;gap:5px;font-size:12px;font-weight:700;white-space:nowrap;color:var(--c);min-width:84px;justify-content:flex-end}.us .ft.ok{--c:var(--ok)}.us .ft.over{--c:var(--wn)}.us .ft.under{--c:var(--bad)}
+.us .ft{display:flex;align-items:center;gap:5px;font-size:12px;font-weight:700;white-space:nowrap;color:var(--c);min-width:84px;justify-content:flex-end}.us .ft.ok{--c:var(--ok)}.us .ft.na{--c:var(--l3);font-weight:600}.us .md.ns{color:var(--l3);background:transparent;box-shadow:inset 0 0 0 1px var(--ln)}.us .m.na{--c:var(--l3)}.us .m.na .rg b{font-size:15px;color:var(--l2)}.us .ft.over{--c:var(--wn)}.us .ft.under{--c:var(--bad)}
 .us .tp{display:flex;align-items:center;gap:10px;min-height:56px;border-top:1px solid var(--ln);padding:6px 0}.us .tp.f{border-top:0}.us .tp .n{width:24px;height:24px;border-radius:50%;flex:none;display:grid;place-items:center;font-size:12px;font-weight:750;background:var(--ph);color:var(--l2)}
 .us .tp .t{flex:1;display:flex;flex-direction:column;gap:1px}.us .tp .t b{font-size:14px;font-weight:600;line-height:1.3}.us .tp .t span{font-size:12px;color:var(--l2);line-height:1.35}
 .us .tp button{display:inline-flex!important;align-items:center;justify-content:center;min-height:44px!important;padding:0 14px!important;border-radius:22px!important;font-size:13px;font-weight:650;color:#fff;background:var(--bl)!important;max-width:44%;text-align:center;line-height:1.15}.us .tp button.sent{background:var(--ph)!important;color:var(--l2)}
@@ -34,9 +83,9 @@ font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif;
 const E=s=>String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const tone=p=>p>=85?'bad':p>=60?'warn':'ok';
 const C=2*Math.PI*26;
-const FIT={ok:['✓','Right model'],over:['↓','Overkill'],under:['↑','May be weak']};
-const meter=m=>{const p=Math.max(0,Math.min(100,+m.pct||0));return`<div class="m gl ${tone(p)}"><div class="rg"><svg viewBox="0 0 64 64" aria-hidden="true"><circle class="t" cx="32" cy="32" r="26"/><circle class="v" cx="32" cy="32" r="26" style="--cf:${C.toFixed(1)};--off:${(C*(1-p/100)).toFixed(1)}"/></svg><b>${p}%</b></div><div class="lb">${E(m.label)}</div>${m.sub?`<div class="sb">${E(m.sub)}</div>`:''}${m.reset?`<div class="rs">${E(m.reset)}</div>`:''}</div>`};
-const lane=(l,i)=>`<div class="ln${i?'':' f'}"><div class="nm"><b><i class="dot${l.state==='working'?' on':''}"></i>${E(l.lane)}</b><span>${E(l.state==='working'?'Working':'Idle')}${l.task?' · '+E(l.task):''}</span></div><span class="md">${E(l.model)}</span><span class="ft ${l.fit}" title="${E(l.note||'')}">${(FIT[l.fit]||FIT.ok)[0]} ${l.fit==='ok'?'Fits':l.fit==='over'?'Use '+E(l.ideal):'Needs '+E(l.ideal)}</span></div>`;
+const FIT={ok:['✓','Right model'],over:['↓','Overkill'],under:['↑','May be weak'],na:['','Model not set']};
+const meter=m=>{const off=m.pct==null,p=off?0:Math.max(0,Math.min(100,+m.pct||0));return`<div class="m gl ${off?'na':tone(p)}"><div class="rg"><svg viewBox="0 0 64 64" aria-hidden="true"><circle class="t" cx="32" cy="32" r="26"/><circle class="v" cx="32" cy="32" r="26" style="--cf:${C.toFixed(1)};--off:${(C*(1-p/100)).toFixed(1)}"/></svg><b>${off?E(m.value||'Off'):p+'%'}</b></div><div class="lb">${E(m.label)}</div>${m.sub?`<div class="sb">${E(m.sub)}</div>`:''}${m.reset?`<div class="rs">${E(m.reset)}</div>`:''}</div>`};
+const lane=(l,i)=>`<div class="ln${i?'':' f'}"><div class="nm"><b><i class="dot${l.state==='working'?' on':''}"></i>${E(l.lane)}</b><span>${E(l.state==='working'?'Working':'Idle')}${l.task?' · '+E(l.task):''}</span></div><span class="md${l.model?'':' ns'}">${E(l.model||'Not set')}</span><span class="ft ${l.fit}" title="${E(l.note||'')}">${l.fit==='na'?'No model':(FIT[l.fit]||FIT.ok)[0]+' '+(l.fit==='ok'?'Fits':l.fit==='over'?'Use '+E(l.ideal):'Needs '+E(l.ideal))}</span></div>`;
 const tip=(t,i)=>`<div class="tp${i?'':' f'}"><span class="n">${i+1}</span><div class="t"><b>${E(t.title)}</b><span>${E(t.detail)}</span></div><button data-i="${i}">${E(t.action)}</button></div>`;
 const hl=D.headline||{tone:'ok',text:''};
 A.innerHTML=`<style>${css}</style><div class="us"><div class="hd"><div class="ic"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M13 2 4 14h6l-1 8 9-12h-6z"/></svg></div><div class="ttl">Usage</div><div class="upd">${E(D.plan||'')}${D.plan&&D.updated?' · ':''}${E(D.updated||'')}</div></div>
