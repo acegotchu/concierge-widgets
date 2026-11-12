@@ -2,7 +2,10 @@
  window.D={date:"YYYY-MM-DD",stages:[[key,label,color]],   // the ledger words: inbound, asked rate, quoted, negotiating, agreed, payment received
    deals:[{id,brand,via,tag,lane,stage,kind:"Paid"|"Affiliate"|"Application",type,channel,status,
      value:{label,amount,unit}|null,last:{who,date,days},next:{text,date,days},deadline:{date,days,label}|null,
-     draft,notes,acts:[..],needsId}],
+     draft,notes,acts:[..],needsId,skin?}],
+   skin (optional, visual only): {bg,fg,accent,accentInk?,muted?,line?,font?,logo?,logoH?,mark?,upper?}. One deal renders as its own
+     branded card: colors, type, wordmark (logo, a data URL, light on bg) in place of the name, mark (data URL) in the avatar.
+     It remaps the card's color variables for both themes, so the stage rail, actions and sendPrompt stay exactly the same.
    paused:{label,count,brands:[{brand,tier,cohort}],restart,restartDate,floor,floorTier,why,from}|null,
    totals:{agreed,paid,onTable,perUnit:[..]}}
  Stage rail on top (tap a stage to filter, tap again for all). Tap a deal to open it and queue one action.
@@ -113,7 +116,15 @@ font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif;
 @media (max-width:560px){.dl .rail{grid-template-columns:repeat(4,minmax(0,1fr));row-gap:10px}.dl .rail::before,.dl .sep{display:none}.dl .rail .nd.pz{grid-column:4}}@media (max-width:460px){.dl .sub{display:none}.dl .nd .lbl{font-size:10.5px}.dl .nd .dot{width:32px;height:32px;font-size:13px}.dl .rail::before{top:18px}.dl .k b{font-size:16px}.dl .k .pu,.dl .k .wo,.dl .pc .rt{display:none}.dl .rt{max-width:38%}}
 @media (prefers-reduced-motion:reduce){.dl *,.dl *::before,.dl *::after{animation:none!important;transition:none!important}}
 /* shared Concierge scale: 16px padding (12px under 440px), 12px between sections, 8px inside */
-@media (max-width:440px){.dl{padding:12px}}`;
+@media (max-width:440px){.dl{padding:12px}}
+.dl .dc.sk .av{background:transparent;color:var(--k-fg);box-shadow:inset 0 0 0 1px var(--fe);font-weight:800}.dl .dc.sk .av img{width:56%;height:56%;object-fit:contain;display:block}
+.dl .dc.sk.sk{background:linear-gradient(100deg,color-mix(in srgb,var(--k-ac) 13%,var(--k-bg)),var(--k-bg) 42%);box-shadow:inset 3px 0 0 var(--k-ac);border-color:color-mix(in srgb,var(--k-ac) 30%,var(--k-bg))}.dl .dc.sk.sk.open{border-color:var(--k-ac)}.dl .nm b.wm{display:flex;align-items:center;align-self:center;flex:0 1 auto}.dl .nm b.wm img{display:block;height:var(--k-lh,12px);width:auto;max-width:100%}
+.dl .dc.sk.up .nm b{text-transform:uppercase;letter-spacing:.05em;font-weight:800}`;
+const cv=v=>String(v==null?'':v).replace(/[;{}<>"\\]/g,'');
+function skv(k){if(!k||typeof k!='object'||!k.bg)return'';const bg=cv(k.bg),fg=cv(k.fg||'#fff'),ac=cv(k.accent||fg),mu=k.muted?cv(k.muted):`color-mix(in srgb,${fg} 64%,transparent)`,ln=k.line?cv(k.line):`color-mix(in srgb,${fg} 15%,transparent)`,as=`color-mix(in srgb,${ac} 18%,transparent)`;
+return[`--card:${bg}`,`--l:${fg}`,`--l2:${mu}`,`--l3:color-mix(in srgb,${fg} 42%,transparent)`,`--fe:${ln}`,`--chip:color-mix(in srgb,${fg} 9%,transparent)`,`--bl:${ac}`,`--bls:${as}`,`--sh:none`,
+`--a-ground:${bg}`,`--a-bone:${bg}`,`--a-ink:${fg}`,`--a-stone:${ln}`,`--a-label:${mu}`,`--a-ember:${ac}`,`--a-emberT:${ac}`,`--a-emberS:${as}`,`--a-on:${cv(k.accentInk||bg)}`,
+`--k-bg:${bg}`,`--k-fg:${fg}`,`--k-ac:${ac}`,k.logoH?`--k-lh:${Number(k.logoH)||12}px`:'',`color:${fg}`,k.font?`font-family:${cv(k.font)}`:''].filter(Boolean).join(';')}
 const e=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const P={deal:'<path d="M3 17l5-5 4 4 8-8"/><path d="M14 8h6v6"/>',chev:'<path d="M6 9l6 6 6-6"/>',pause:'<path d="M9 5v14M15 5v14"/>',send:'<path d="M5 12h13M13 6l6 6-6 6"/>',clock:'<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>',mail:'<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3.5 6.5l8.5 6 8.5-6"/>',flag:'<path d="M5 21V4M5 4h11l-2 4 2 4H5"/>'};
 const I=(k,s=16,w=2)=>`<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${P[k]}</svg>`;
@@ -138,9 +149,9 @@ A.innerHTML=`<style>${css}</style><div class="dl" style="${SK.map((k,i)=>`--c${i
 <div class="bar"><span class="c">${qn?`<b>${qn} queued:</b> ${e(Object.entries(Q).map(([id,a])=>(id=='__paused'?'LinkedIn':deals.find(d=>d.id==id).brand)+' '+a.toLowerCase()).join(', '))}`:'Tap a deal to queue an action'}</span><button class="go" id="go"${qn?'':' disabled'}>Send ${qn||''} ${I('send',14,2.4)}</button></div></div>`;
 bind()}
 function card(d,i){const sc=SC[d.stage],si=SK.indexOf(d.stage),q=Q[d.id],v=d.value,isO=open==d.id;
-const nx=q?`Queued: ${q}`:(d.next&&d.next.text)||'';
-return`<div class="dc${isO?' open':''}" data-id="${e(d.id)}" style="--sc:${sc};--i:${i}">
-<button class="row" data-tg="1" aria-expanded="${isO}"><span class="av">${e((d.brand||'?')[0])}</span><span class="mid"><span class="nm"><b>${e(d.brand)}</b>${d.via?`<span>via ${e(d.via)}</span>`:d.tag?`<span>${e(d.tag)}</span>`:''}</span><span class="nx${q?' q':''}">${e(nx)}</span>
+const nx=q?`Queued: ${q}`:(d.next&&d.next.text)||'',k=skv(d.skin)?d.skin:null;
+return`<div class="dc${isO?' open':''}${k?' sk'+(k.upper?' up':''):''}" data-id="${e(d.id)}"${k?` data-brand-skin="${e(k.name||d.id)}"`:''} style="--sc:${sc};--i:${i}${k?';'+skv(k):''}">
+<button class="row" data-tg="1" aria-expanded="${isO}"><span class="av">${k&&k.mark?`<img src="${e(k.mark)}" alt="">`:e((d.brand||'?')[0])}</span><span class="mid"><span class="nm">${k&&k.logo?`<b class="wm"><img src="${e(k.logo)}" alt="${e(d.brand)}"></b>`:`<b>${e(d.brand)}</b>`}${d.via?`<span>via ${e(d.via)}</span>`:d.tag?`<span>${e(d.tag)}</span>`:''}</span><span class="nx${q?' q':''}">${e(nx)}</span>
 <span class="chips">${d.deadline?dueChip(d.deadline.date,'Due'):d.next&&d.next.date?dueChip(d.next.date,'Next'):''}${d.last&&d.last.date?`<span class="cp">${I('clock',11,2.4)}${e(d.last.who||'')} ${ago(dd(d.last.date)==null?null:-dd(d.last.date))}</span>`:''}${d.draft?`<span class="cp b">${I('mail',11,2.4)}Draft</span>`:''}${d.kind!='Paid'?`<span class="cp">${e(d.kind)}</span>`:''}</span></span>
 <span class="rt"><span class="val${v&&v.amount?'':' mute'}">${v?e(v.label):d.kind=='Paid'?'Price TBD':''}</span><span class="pr" title="${e(SL[d.stage])}">${SK.map((k,j)=>`<i class="${j<=si?'f':''}"></i>`).join('')}</span></span></button>
 <div class="ex"><div><div class="bd"><dl class="kv"><dt>Stage</dt><dd>${e(SL[d.stage])}${d.type?' · '+e(d.type):''}</dd><dt>Status</dt><dd>${e(d.status)}</dd>${d.draft?`<dt>Draft</dt><dd>${e(d.draft)}</dd>`:''}<dt>Channel</dt><dd>${e(d.channel)}</dd>${d.notes?`<dt>Notes</dt><dd>${e(d.notes)}</dd>`:''}</dl>

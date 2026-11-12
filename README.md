@@ -20,7 +20,7 @@ Usage:
 ```html
 <div id="app"></div>
 <script>window.D = { /* data */ };</script>
-<script src="https://cdn.jsdelivr.net/gh/acegotchu/concierge-widgets@v11/mail.js"></script>
+<script src="https://cdn.jsdelivr.net/gh/acegotchu/concierge-widgets@v12/mail.js"></script>
 ```
 
 Order matters: `#app` first, then `window.D`, then the template script.
@@ -44,6 +44,7 @@ The ace theme loads `ace-logo.png` (light grounds) and `ace-logo-light.png` (dar
 
 ## Versions
 
+- v12: Deals takes an optional per-deal brand skin, `deal.skin` = {bg, fg, accent, accentInk?, muted?, line?, font?, logo?, logoH?, mark?, upper?}. That deal renders as its own branded card (colors, type, a wordmark in place of the name, a mark in the avatar, an accent edge) inside either theme. Logo and mark are data URLs. The skin is visual only: the stage rail, actions and sendPrompt payloads are unchanged.
 - v11: every widget shows when its data was last synced, under the header, in both themes: "Synced 10:40 AM ET" from `D.synced` = {at, tz, tzLabel, staleHours, sources: [{label, at}]}. Older than `staleHours` (default 2) it adds "· 3h ago"; any source with no `at` adds "· <labels> not checked", in a warning colour. No `D.synced`, no stamp. Behavior and sendPrompt payloads are unchanged.
 - v10: the ace theme for every template (Today, Open, Mail, Deals, Week, Stay, Fly, Usage, Manager), switched with `D.theme = "ace"` or `data-theme="ace"`; the default look is unchanged. Also: Deals stage rail uses the ledger's stage words (inbound, asked rate, quoted, negotiating, agreed, payment received; paused apart) with equal columns and a two-row layout under 560px; Fly map pans and zooms (+, -, reset; tap the map to drag, pinch or scroll; Done hands scrolling back); Stay and Fly show the local time of day in the ace theme; Usage shows extra usage as "Off" when it isn't enabled and "Model not set" for lanes without a model; Week's hero count-up can no longer show a negative or overshooting number.
 - v9: the signature marks (ace-logo.png, ace-logo-light.png) for the ace theme header.
