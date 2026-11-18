@@ -26,7 +26,10 @@ const app=p=>p.locator('#app');
  for(const s of steps){if(s.setup)await s.setup(p);await p.waitForTimeout(400);
   await cdp.send('Animation.setPlaybackRate',{playbackRate:.1});const t0=Date.now();await s.run(p);const fr=[];
   for(let i=0;i<(s.frames||14);i++){const f=path.join(out,`${card}-${label}-${s.name}-${String(i).padStart(2,'0')}.png`);await app(p).screenshot({path:f});fr.push({f,ms:Math.round((Date.now()-t0)/10)});await p.waitForTimeout(Math.max(0,(i+1)*(s.every||250)-(Date.now()-t0)))}
-  await cdp.send('Animation.setPlaybackRate',{playbackRate:1});await p.waitForTimeout(500);res.steps.push({name:s.name,frames:fr})}
+  await cdp.send('Animation.setPlaybackRate',{playbackRate:1});await p.waitForTimeout(500);res.steps.push({name:s.name,frames:fr});
+  if(s.again){/* reversal: run, then the second tap ~60ms of animation time later (slowed 10x) */await cdp.send('Animation.setPlaybackRate',{playbackRate:.1});const t1=Date.now();await s.again(p);await p.waitForTimeout(600);await s.run(p);const fr2=[];
+   for(let i=0;i<(s.frames||14);i++){const f=path.join(out,`${card}-${label}-${s.name}-rev-${String(i).padStart(2,'0')}.png`);await app(p).screenshot({path:f});fr2.push({f,ms:Math.round((Date.now()-t1)/10)});await p.waitForTimeout(Math.max(0,600+(i+1)*(s.every||250)-(Date.now()-t1)))}
+   await cdp.send('Animation.setPlaybackRate',{playbackRate:1});await p.waitForTimeout(500);res.steps.push({name:s.name+' (again, then reversed mid-flight)',frames:fr2})}}
  res.sent=await p.evaluate(()=>window.__sent);await ctx.close()}
 // 2. real-time video
 {const {ctx,p}=await open({recordVideo:{dir:out,size:{width:W,height:900}}});for(const s of steps){if(s.setup)await s.setup(p);await p.waitForTimeout(500);await s.run(p);await p.waitForTimeout(900);if(s.again){await s.again(p);await p.waitForTimeout(900)}}
