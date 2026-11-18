@@ -88,23 +88,119 @@ skin('.wk',`
 & .cn{background:var(--a-ember)!important;box-shadow:none!important;font-weight:500;color:var(--a-on)}
 & .hero,& .sec,& .pt{animation:aceRise var(--a-b) var(--a-out) both}@keyframes aceRise{from{transform:translateY(8px);opacity:0}}
 @media (max-width:440px){& .hv{font-size:48px;line-height:46px}& .ph0 .big b{font-size:44px;line-height:42px}& .tb button{font-size:10px;letter-spacing:.04em}}`);stampSync('.hd','after');
-/*SKIN:END*/const SP='cubic-bezier(.32,.72,0,1)';
+/*SKIN:END*/
+/*MOTION:BEGIN*/
+/* Motion layer (shared; synced into every template by _motion/sync.py, edit it there). Springs, not curves: every animation is a
+ damped spring described like SwiftUI (response = seconds per oscillation, damping fraction), sampled into a CSS linear() easing
+ for CSS and WAAPI, so it runs on the compositor (transform, opacity, clip-path only). Three presets:
+   snappy (.25s, .86): direct feedback. Press, toggle, option select, segmented thumb. Settles in 250ms.
+   smooth (.30s, 1.0): layout. Expand and collapse, FLIP moves, tab content, number rolls, card and row entry. 95% in 230ms, settled 360ms.
+   bouncy (.32s, .68): confirmation. Tick pop, toast in. 95% there in 145ms, a 5% overshoot settles by 355ms.
+ Every move is interruptible: a new target starts from where the element is now, and expand/collapse also keeps its velocity.
+ prefers-reduced-motion: no travel, no scale, no overshoot; changes crossfade in 150ms. CSS gets the curves as custom properties on
+ #app: var(--mx-snappy), var(--mx-smooth), var(--mx-bouncy) are "<duration> <easing>" pairs, e.g. transition:transform var(--mx-smooth). */
+const MX=(()=>{const RM=matchMedia('(prefers-reduced-motion: reduce)'),R=()=>RM.matches,now=()=>performance.now(),
+LIN=(()=>{try{return CSS.supports('transition-timing-function','linear(0, 1)')}catch(e){return false}})(),
+SPR={snappy:[.25,.86,'cubic-bezier(.25,.9,.3,1)'],smooth:[.3,1,'cubic-bezier(.2,.85,.25,1)'],bouncy:[.32,.68,'cubic-bezier(.3,1.35,.5,1)']},CV={};
+/* x(t): displacement of a unit spring released at 1 with velocity v0 (units/s), heading to 0 */
+function sx(resp,z,v0){const w=2*Math.PI/resp;if(z<1){const wd=w*Math.sqrt(1-z*z),B=(v0+z*w)/wd;return t=>Math.exp(-z*w*t)*(Math.cos(wd*t)+B*Math.sin(wd*t))}const B=v0+w;return t=>(1+B*t)*Math.exp(-w*t)}
+/* curve(name,v) -> {e: easing, d: ms, u(t): progress 0..1 at t seconds, du(t): progress per second}; v is the starting progress velocity */
+function curve(n,v=0){v=Math.max(-40,Math.min(40,Math.round(v*4)/4));const k=n+v;if(CV[k])return CV[k];const[r,z,fb]=SPR[n]||SPR.smooth,x=sx(r,z,-v);
+let T=0;for(let t=0;t<1.2;t+=1/240)if(Math.abs(x(t))>.005)T=t;T=Math.max(.12,T+1/240);
+const N=Math.max(12,Math.ceil(T*90)),pts=[];for(let i=0;i<=N;i++){const t=T*i/N;pts.push(i==N?1:+(1-x(t)).toFixed(4))}
+const u=t=>t>=T?1:1-x(t),du=t=>t>=T?0:(x(Math.max(0,t-.002))-x(t+.002))/.004;return CV[k]={e:LIN?`linear(${pts.join(',')})`:fb,d:Math.round(T*1000),u,du}}
+const card=()=>A.querySelector(':scope>:not(style):not(script):not(link)'),ease=n=>{const c=curve(n);return c.d+'ms '+c.e};
+/* one global sheet: rolling-digit ghosts and the reduced-motion crossfade; lives in the document (or shadow root), so it survives re-renders */
+(()=>{const r=A.getRootNode&&A.getRootNode(),h=r&&r.host?r:A.ownerDocument.head;if(!h||h.querySelector('style[data-mx]'))return;const s=A.ownerDocument.createElement('style');s.setAttribute('data-mx','');
+s.textContent='.mx-d{display:inline-block;position:relative;white-space:pre}.mx-g{position:absolute;left:0;top:0;pointer-events:none}.mx-g::before{content:attr(data-c)}';h.appendChild(s)})();
+const vars=()=>{for(const n in SPR)A.style.setProperty('--mx-'+n,R()?'1ms linear':ease(n))};vars();try{RM.addEventListener('change',vars)}catch(e){}
+const anim=(el,kf,n,o={})=>{const c=typeof n=='object'?n:curve(n);return el.animate(kf,{duration:c.d,easing:c.e,fill:'both',...o})};
+const fade=(el,a,b,ms=150)=>el&&el.animate([{opacity:a},{opacity:b}],{duration:ms,easing:'ease-out'});
+
+/* disclose(row, open, set, {body, root}): expand or collapse one row with matched geometry. set(bool) is the template's own class
+ toggle. The layout changes once; what follows the row (rows below, footer, the card's bottom edge) is FLIPped with additive
+ translateY, the row reveals or hides its new height with clip-path, so no frame does layout. A collapse keeps the open layout
+ until the spring lands, then commits. A second call mid-flight reverses from the current position and velocity. */
+const ST=new WeakMap();
+function after(el,root){const out=[];while(el&&el!==root&&el.parentElement){let s=el.nextElementSibling;while(s){const p=getComputedStyle(s).position;if(p!='absolute'&&p!='fixed')out.push(s);s=s.nextElementSibling}el=el.parentElement}return out}
+function scrollers(el,root){const out=[];while(el&&el!==root){el=el.parentElement;if(el&&el.scrollHeight>el.clientHeight+1)out.push([el,el.scrollTop])}return out}
+function disclose(row,open,set,o={}){const st=ST.get(row);if(st&&st.to==open)return;const root=o.root||card(),body=o.body?row.querySelector(o.body):null;
+if(body)body.style.transition='none';
+if(R()||!row.isConnected||!root){if(st)st.stop();set(open);if(open&&R())fade(body,0,1);return}
+let p0=open?0:1,v=0;if(st){p0=st.p();v=st.v();st.stop()}
+const F=after(row,root),E=[row,root,...F],sc=scrollers(row,root),rect=()=>E.map(e=>e.getBoundingClientRect()),keep=()=>sc.forEach(([e,t])=>e.scrollTop=t);
+const oa=sc.map(([e])=>{const v=e.style.overflowAnchor;e.style.overflowAnchor='none';return v});let a,b;if(st||!open){b=rect();set(false);a=rect();set(true);keep()}else{a=rect();set(true);b=rect();keep()}
+sc.forEach(([e],i)=>e.style.overflowAnchor=oa[i]);const dh=b[0].height-a[0].height,dr=b[1].height-a[1].height,dy=F.map((e,i)=>b[i+2].top-a[i+2].top);
+if(Math.abs(dh)<.5){if(!open)set(false);return}
+const to=open?1:0,c=curve('smooth',(to-p0)?v/(to-p0):0),rr=e=>parseFloat(getComputedStyle(e).borderBottomLeftRadius)||0,R0=rr(row),R1=rr(root),
+clip=(d,p,r,t)=>`inset(${t}px 0 ${Math.max(0,d*(1-p)).toFixed(1)}px 0 round ${r}px)`,ty=(d,p)=>`translateY(${(-d*(1-p)).toFixed(1)}px)`,
+an=[anim(row,[{clipPath:clip(dh,p0,R0,-24)},{clipPath:clip(dh,to,R0,-24)}],c)];
+if(Math.abs(dr)>.5)an.push(anim(root,[{clipPath:clip(dr,p0,R1,0)},{clipPath:clip(dr,to,R1,0)}],c));
+F.forEach((e,i)=>{if(Math.abs(dy[i])>.5)an.push(anim(e,[{transform:ty(dy[i],p0)},{transform:ty(dy[i],to)}],c,{composite:'add'}))});
+if(body)an.push(anim(body,[{opacity:p0,transform:`translateY(${(-6*(1-p0)).toFixed(1)}px)`},{opacity:to,transform:`translateY(${-6*(1-to)}px)`}],c,{composite:'replace'}));
+const el=()=>(an[0].currentTime||0)/1000,s={to:open,p:()=>p0+(to-p0)*c.u(el()),v:()=>(to-p0)*c.du(el()),stop(){an.forEach(x=>x.cancel());ST.delete(row)}};ST.set(row,s);
+an[0].finished.then(()=>{if(ST.get(row)!==s)return;if(!open)set(false);s.stop()}).catch(()=>{})}
+
+/* flip(sel, mutate, n): anything matching sel moves from where it was to where mutate() puts it (re-render safe: matched by
+ data-mx key, else by selector order). Width changes scale on X from the left (segmented thumbs, rails). Returns the new elements. */
+function flip(sel,mutate,n='smooth'){const key=(e,i)=>e.dataset.mx||(sel+'#'+i),q=()=>[...A.querySelectorAll(sel)],m=new Map();q().forEach((e,i)=>m.set(key(e,i),e.getBoundingClientRect()));mutate();const els=q();if(R())return els;
+els.forEach((e,i)=>{const f=m.get(key(e,i));if(!f)return;const l=e.getBoundingClientRect(),dx=f.left-l.left,dy=f.top-l.top,sx=l.width?f.width/l.width:1;
+if(Math.abs(dx)<.5&&Math.abs(dy)<.5&&Math.abs(sx-1)<.01)return;anim(e,[{transformOrigin:'0 0',transform:`translate(${dx}px,${dy}px) scaleX(${sx})`},{transformOrigin:'0 0',transform:'none'}],n,{composite:'add',fill:'none'})});return els}
+
+/* swap(get, dir, mutate): tab and page switches. The old content leaves as a ghost (slide -dir and fade), the new content slides in
+ from dir and fades up, both on the smooth spring. The ghost is marked data-mx-ghost, aria-hidden and inert. dir 0 = crossfade only (also what reduced motion gets). Interruptible: a second
+ switch ghosts the content where it is, mid-flight. */
+let G=null;function swap(get,dir,mutate){const old=get(),root=card();if(G){G.remove();G=null}let g=null;
+if(old&&root&&old.isConnected){const r=old.getBoundingClientRect(),o=root.getBoundingClientRect(),cs=getComputedStyle(old);g=old.cloneNode(true);g.removeAttribute('id');g.querySelectorAll('[id]').forEach(x=>x.removeAttribute('id'));
+g.setAttribute('aria-hidden','true');g.setAttribute('data-mx-ghost','');g.inert=true;Object.assign(g.style,{position:'absolute',left:r.left-o.left-root.clientLeft+'px',top:r.top-o.top-root.clientTop+'px',width:r.width+'px',height:r.height+'px',margin:'0',pointerEvents:'none',zIndex:'0',transform:cs.transform=='none'?'':cs.transform,opacity:cs.opacity,animation:'none',boxSizing:'border-box'});
+g.querySelectorAll('*').forEach(x=>x.style.animation='none');g._st=old.scrollTop;g._sl=old.scrollLeft}
+mutate();const nw=get(),d=R()?0:dir,host=card();if(g&&host){host.insertBefore(g,host.firstChild);g.scrollTop=g._st;g.scrollLeft=g._sl}
+if(g){G=g;const c=curve('smooth');g.animate([{opacity:+g.style.opacity||1,transform:g.style.transform||'none'},{opacity:0,transform:`translateX(${-d*28}px)`}],{duration:R()?150:Math.round(c.d*.6),easing:R()?'ease-out':c.e,fill:'both'}).finished.then(()=>{g.remove();if(G===g)G=null}).catch(()=>{})}
+if(nw){if(R())fade(nw,0,1);else anim(nw,[{opacity:0,transform:`translateX(${d*28}px)`},{opacity:1,transform:'none'}],'smooth',{fill:'none'})}return nw}
+
+/* text(el, s): set text; numbers inside roll digit by digit (up when they grow, down when they shrink), like iOS numeric text.
+ Words around them stay put. A different shape crossfades. textContent is right as soon as this returns (ghost digits are CSS only). */
+function text(el,s){if(!el)return;s=String(s);const o=el.getAttribute('data-mxt')??el.textContent;if(o===s&&el.textContent===s)return;el.setAttribute('data-mxt',s);
+if(R()||!el.isConnected||o===s){el.textContent=s;if(R()&&o!==s)fade(el,.35,1);return}const sp=x=>x.split(/(\d[\d.,]*)/),P=sp(o),Q=sp(s),nm=x=>parseFloat(x.replace(/,/g,''))||0;
+if(P.length!=Q.length||P.some((t,i)=>i%2==0&&t!==Q[i])){el.textContent='';const w=document.createElement('span');w.className='mx-d';w.textContent=s;el.append(w);anim(w,[{opacity:0,transform:'translateY(.2em)'},{opacity:1,transform:'none'}],'smooth',{fill:'none'});return}
+el.textContent='';const c=curve('smooth');Q.forEach((t,i)=>{if(i%2==0||t===P[i]){if(t)el.append(t);return}const up=nm(t)>=nm(P[i])?1:-1,ot=P[i].padStart(t.length,' ');
+[...t].forEach((ch,j)=>{const was=ot[ot.length-t.length+j]??'';if(ch===was){el.append(ch);return}const w=document.createElement('span');w.className='mx-d';w.textContent=ch;el.append(w);
+w.animate([{transform:`translateY(${.55*up}em)`,opacity:0},{transform:'none',opacity:1}],{duration:c.d,easing:c.e,delay:j*18});
+if(was.trim()){const gh=document.createElement('span');gh.className='mx-g';gh.setAttribute('data-c',was);gh.setAttribute('aria-hidden','true');w.append(gh);
+gh.animate([{transform:'none',opacity:1},{transform:`translateY(${-.55*up}em)`,opacity:0}],{duration:Math.round(c.d*.7),easing:c.e,delay:j*18,fill:'both'}).finished.then(()=>gh.remove()).catch(()=>{})}})})}
+
+/* pop(el, from): a tick or a selection lands with a small spring scale; a second tap restarts from the current scale. */
+const PO=new WeakMap();function pop(el,s=.82,n='bouncy'){if(!el||R())return;const pv=PO.get(el);let f=s;if(pv){const k=pv.c.u((pv.a.currentTime||0)/1000);f=Math.min(s,pv.s+(1-pv.s)*k);pv.a.cancel()}
+const c=curve(n),a=el.animate([{transform:`scale(${f})`},{transform:'scale(1)'}],{duration:c.d,easing:c.e,composite:'add'});PO.set(el,{a,c,s:f});a.finished.then(()=>PO.get(el)&&PO.get(el).a===a&&PO.delete(el)).catch(()=>{})}
+
+/* toast(el) springs a toast or snackbar in; out(el) lets it go (fade and drop, 160ms) and removes it. */
+function toast(el,y=18){if(!el)return;el.style.animation='none';if(R())return void fade(el,0,1);anim(el,[{opacity:0,transform:`translateY(${y}px) scale(.96)`},{opacity:1,transform:'none'}],'bouncy',{fill:'none'})}
+function out(el,done){if(!el)return;if(el._mxo)return;el._mxo=1;el.style.pointerEvents='none';const a=el.animate([{opacity:getComputedStyle(el).opacity},{opacity:0}],{duration:160,easing:'cubic-bezier(.4,0,1,1)',fill:'forwards'});if(!R())el.animate([{transform:'none'},{transform:'translateY(8px) scale(.98)'}],{duration:160,easing:'cubic-bezier(.4,0,1,1)',fill:'forwards',composite:'add'});
+a.finished.then(()=>{el.remove();done&&done()}).catch(()=>{el.remove();done&&done()})}
+
+/* enter(els, {y, step, max}): card and row entry, a short rise and fade, staggered (step ms per row, capped at max rows). */
+function enter(els,o={}){if(!els)return;els=els.length!=null?[...els]:[els];const y=o.y??10,st=o.step??28,mx=o.max??8;els.forEach((e,i)=>{if(R())return void fade(e,0,1,180);
+const dl=Math.min(i,mx)*st;anim(e,[{transform:`translateY(${y}px)`},{transform:'none'}],'smooth',{delay:dl,fill:'backwards',composite:'add'});e.animate([{opacity:0},{opacity:1}],{duration:220,delay:dl,easing:'cubic-bezier(.2,0,0,1)',fill:'backwards'})})}
+
+return{R,curve,ease,disclose,flip,swap,text,pop,toast,out,enter,fade}})();
+/*MOTION:END*/
+const SP='cubic-bezier(.32,.72,0,1)';
 const css=`.wk{--bg:#f2f3f7;--card:rgba(255,255,255,.74);--rim:rgba(255,255,255,.95);--l:#0b0b0c;--l2:rgba(30,30,38,.64);--l3:rgba(30,30,38,.4);--ln:rgba(0,0,0,.07);--ph:rgba(118,118,128,.1);--phb:rgba(118,118,128,.28);--sh:0 8px 24px rgba(20,30,70,.09);--bl:#007aff;--ok:#1f9d55;--bad:#e5372b;--seg:rgba(118,118,128,.12);--segOn:#fff;
 --s-inbound:#0a84ff;--s-rate:#af52de;--s-quoted:#ff9500;--s-agreed:#28c76f;--s-paid:#32ade6;--s-faded:#8e8e93;
 --tt:linear-gradient(135deg,#25f4ee 0%,#111 45%,#fe2c55 100%);--li:linear-gradient(135deg,#0a66c2,#0b4f96);--ig:linear-gradient(135deg,#feda75 0%,#fa7e1e 25%,#d62976 55%,#962fbf 80%,#4f5bd5 100%);
 font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif;background:var(--bg);color:var(--l);border-radius:24px;padding:16px;display:flex;flex-direction:column;gap:12px;overflow:hidden;width:100%;min-width:0;box-sizing:border-box;position:relative;isolation:isolate;-webkit-font-smoothing:antialiased}
 .wk::before{content:"";position:absolute;inset:-30% -30% auto -30%;height:420px;z-index:-1;pointer-events:none;background:radial-gradient(40% 50% at 18% 40%,rgba(48,209,88,.20),transparent 70%),radial-gradient(45% 55% at 82% 25%,rgba(10,132,255,.20),transparent 70%),radial-gradient(35% 45% at 55% 75%,rgba(191,90,242,.14),transparent 70%)}
 @media (prefers-color-scheme:dark){.wk{--bg:#0a0c12;--card:rgba(28,30,40,.66);--rim:rgba(255,255,255,.09);--l:#fff;--l2:rgba(235,235,245,.66);--l3:rgba(235,235,245,.38);--ln:rgba(255,255,255,.08);--ph:rgba(118,118,128,.16);--phb:rgba(235,235,245,.22);--sh:0 8px 24px rgba(0,0,0,.4);--bl:#0a84ff;--ok:#30d158;--bad:#ff453a;--seg:rgba(118,118,128,.24);--segOn:rgba(99,99,102,.9)}}
-.wk *{box-sizing:border-box;min-width:0}.wk button,.wk a{all:unset;box-sizing:border-box!important;border:0!important;background:transparent!important;box-shadow:none!important;min-height:0!important;cursor:pointer;-webkit-tap-highlight-color:transparent;transition:transform .3s ${SP},opacity .2s,color .2s}.wk button:active,.wk a:active{transform:scale(.97)}.wk button:focus-visible,.wk a:focus-visible{outline:2px solid var(--bl)!important;outline-offset:2px}
+.wk *{box-sizing:border-box;min-width:0}.wk button,.wk a{all:unset;box-sizing:border-box!important;border:0!important;background:transparent!important;box-shadow:none!important;min-height:0!important;cursor:pointer;-webkit-tap-highlight-color:transparent;transition:transform var(--mx-snappy),opacity .2s,color .2s}.wk button:active,.wk a:active{transform:scale(.97)}.wk button:focus-visible,.wk a:focus-visible{outline:2px solid var(--bl)!important;outline-offset:2px}
 .wk svg{display:block;flex:none}
 .wk .hd{display:flex;align-items:center;gap:10px;min-height:32px}.wk .ic{width:32px;height:32px;border-radius:9px;display:grid;place-items:center;color:#fff;flex:none;background:linear-gradient(135deg,#30d158,#0a84ff);box-shadow:0 2px 10px rgba(10,132,255,.32)}.wk .ttl{font-size:17px;font-weight:700;letter-spacing:-.02em;white-space:nowrap;flex:none}
 .wk .tt2{display:flex;flex-direction:column;gap:1px;min-width:0}.wk .rng{font-size:12px;color:var(--l2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-variant-numeric:tabular-nums}.wk .wkc{margin-left:auto;font-size:12px;font-weight:600;color:var(--l2);background:var(--card);box-shadow:inset 0 0 0 .5px var(--rim);padding:5px 10px;border-radius:999px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-variant-numeric:tabular-nums}
 /* segmented control */
 .wk .tb{position:relative;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));height:44px;padding:4px;border-radius:14px;background:var(--seg);-webkit-backdrop-filter:blur(20px) saturate(170%);backdrop-filter:blur(20px) saturate(170%)}
-.wk .tb .th{position:absolute;top:4px;bottom:4px;left:4px;width:calc((100% - 8px)/5);border-radius:10px;background:var(--segOn);box-shadow:0 3px 8px rgba(0,0,0,.12),0 0 0 .5px rgba(0,0,0,.04);transition:transform .55s ${SP}}
+.wk .tb .th{position:absolute;top:4px;bottom:4px;left:4px;width:calc((100% - 8px)/5);border-radius:10px;background:var(--segOn);box-shadow:0 3px 8px rgba(0,0,0,.12),0 0 0 .5px rgba(0,0,0,.04)}
 .wk .tb button{position:relative;z-index:1;display:flex!important;align-items:center;justify-content:center;gap:5px;height:36px!important;font-size:12.5px;font-weight:600;color:var(--l2);white-space:nowrap;overflow:hidden}.wk .tb button.on{color:var(--l)}.wk .tb button i{width:6px;height:6px;border-radius:50%;flex:none;background:var(--g);opacity:.9}.wk .tb button i.off{background:var(--phb)}
 /* pages */
-.wk .vp{position:relative;height:412px;overflow:hidden;margin:0 -16px;touch-action:pan-y}.wk .tr{display:flex;height:100%;transition:transform .55s ${SP};will-change:transform}.wk .tr.drag{transition:none}
+.wk .vp{position:relative;height:412px;overflow:hidden;margin:0 -16px;touch-action:pan-y}.wk .tr{display:flex;height:100%;will-change:transform}.wk .tr.drag{transition:none;-webkit-user-select:none;user-select:none}
 .wk .pg{flex:0 0 100%;height:100%;overflow-y:auto;overflow-x:hidden;padding:2px 16px 18px;display:flex;flex-direction:column;gap:12px;scrollbar-width:none;overscroll-behavior:contain;-webkit-mask-image:linear-gradient(180deg,#000 calc(100% - 22px),transparent);mask-image:linear-gradient(180deg,#000 calc(100% - 22px),transparent)}.wk .pg::-webkit-scrollbar{display:none}.wk .pg>*{flex-shrink:0}
 .wk .gl{background:var(--card);border-radius:18px;box-shadow:var(--sh),inset 0 0 0 .5px var(--rim);-webkit-backdrop-filter:blur(24px) saturate(180%);backdrop-filter:blur(24px) saturate(180%)}
 .wk .st{display:flex;align-items:baseline;gap:6px;font-size:12px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--l3)}.wk .st span{margin-left:auto;text-transform:none;letter-spacing:0;font-weight:600;font-variant-numeric:tabular-nums}
@@ -116,8 +212,8 @@ font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif;
 .wk .hl{font-size:12px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;opacity:.78;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .wk .hv{font-size:42px;line-height:1.02;font-weight:800;letter-spacing:-.035em;font-variant-numeric:tabular-nums;margin:6px 0 8px;white-space:nowrap}.wk .hv.ph{color:rgba(255,255,255,.4)}
 .wk .dc{display:inline-flex;align-items:center;gap:4px;font-size:12px;font-weight:700;padding:4px 9px;border-radius:999px;background:rgba(255,255,255,.16);color:#fff;white-space:nowrap;font-variant-numeric:tabular-nums}.wk .dc.up{background:rgba(48,209,88,.3)}.wk .dc.dn{background:rgba(255,69,58,.32)}.wk .dc.mu{background:rgba(255,255,255,.12);color:rgba(255,255,255,.8);font-weight:600}
-.wk .sp{position:relative;z-index:1}.wk .sp .sv{position:relative}.wk .sp svg{width:100%;height:60px;overflow:visible}.wk .sp .ln{fill:none;stroke:#fff;stroke-width:2.4;stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:var(--len);stroke-dashoffset:var(--len);animation:draw 1.1s .25s ${SP} forwards}@keyframes draw{to{stroke-dashoffset:0}}
-.wk .sp .ar{opacity:0;animation:fade .8s .7s forwards}@keyframes fade{to{opacity:1}}.wk .sp .dt,.wk .sp .pu{position:absolute;width:8px;height:8px;margin:-4px 0 0 -4px;border-radius:50%;background:#fff;opacity:0}.wk .sp .dt{box-shadow:0 0 10px 2px rgba(255,255,255,.7);animation:fade .3s 1.2s forwards}.wk .sp .pu{animation:pulse 2.2s 1.3s 2}@keyframes pulse{0%{opacity:.5;transform:scale(1)}100%{opacity:0;transform:scale(3.2)}}
+.wk .sp{position:relative;z-index:1}.wk .sp .sv{position:relative}.wk .sp svg{width:100%;height:60px;overflow:visible}.wk .sp .ln{fill:none;stroke:#fff;stroke-width:2.4;stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:var(--len);stroke-dashoffset:var(--len);animation:draw var(--mx-smooth) .15s forwards}@keyframes draw{to{stroke-dashoffset:0}}
+.wk .sp .ar{opacity:0;animation:fade .3s .2s forwards}@keyframes fade{to{opacity:1}}.wk .sp .dt,.wk .sp .pu{position:absolute;width:8px;height:8px;margin:-4px 0 0 -4px;border-radius:50%;background:#fff;opacity:0}.wk .sp .dt{box-shadow:0 0 10px 2px rgba(255,255,255,.7);animation:fade .2s .4s forwards}.wk .sp .pu{animation:pulse 2.2s .5s 2}@keyframes pulse{0%{opacity:.5;transform:scale(1)}100%{opacity:0;transform:scale(3.2)}}
 .wk .hero.solo{grid-template-columns:minmax(0,1fr)}.wk .chs{display:flex;flex-wrap:wrap;gap:6px}.wk .hd2{position:relative;z-index:1;display:flex;flex-direction:column;gap:6px;align-self:center}.wk .dl2{display:flex;flex-direction:column;padding:8px 12px;border-radius:14px;background:rgba(255,255,255,.12);box-shadow:inset 0 0 0 .5px rgba(255,255,255,.18),inset 0 1px 0 rgba(255,255,255,.14);-webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px)}.wk .dl2 b{font-size:15px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.wk .dl2 span{font-size:12px;opacity:.8;white-space:nowrap;font-variant-numeric:tabular-nums}
 .wk .sp .dl{display:flex;justify-content:space-between;font-size:10px;font-weight:600;opacity:.6;margin-top:4px}
 /* insights */
@@ -140,12 +236,12 @@ font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif;
 .wk .ph0 .pn{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;opacity:.92;position:relative;z-index:1}.wk .ph0 .big{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;position:relative;z-index:1}.wk .ph0 .big b{font-size:40px;font-weight:800;letter-spacing:-.035em;line-height:1;font-variant-numeric:tabular-nums}.wk .ph0 .big span{font-size:13px;opacity:.85}
 .wk .ph0 .dc{position:relative;z-index:1;align-self:flex-start}
 .wk .sg{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}.wk .sg div{padding:10px 12px;border-radius:14px;display:flex;flex-direction:column;gap:2px}.wk .sg small{font-size:12px;color:var(--l2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.wk .sg b{font-size:18px;font-weight:750;font-variant-numeric:tabular-nums;white-space:nowrap}.wk .sg .na b{color:var(--l3);font-size:15px;font-weight:600}.wk .sg em{font-style:normal;font-size:12px;font-weight:700}
-.wk .bars{display:grid;grid-template-columns:repeat(7,1fr);align-items:end;gap:6px;height:72px}.wk .bars i{display:block;border-radius:5px 5px 2px 2px;background:var(--g);transform-origin:bottom;animation:gro .8s ${SP} both}@keyframes gro{from{transform:scaleY(0)}}.wk .bl{display:grid;grid-template-columns:repeat(7,1fr);gap:6px;font-size:10px;font-weight:600;color:var(--l3);text-align:center}
+.wk .bars{display:grid;grid-template-columns:repeat(7,1fr);align-items:end;gap:6px;height:72px}.wk .bars i{display:block;border-radius:5px 5px 2px 2px;background:var(--g);transform-origin:bottom}.wk .bl{display:grid;grid-template-columns:repeat(7,1fr);gap:6px;font-size:10px;font-weight:600;color:var(--l3);text-align:center}
 .wk .tp{display:flex!important;align-items:center;gap:10px;min-height:48px!important;padding:8px 12px!important;border-radius:14px!important;background:var(--ph)!important}.wk .tp .tx{flex:1;display:flex;flex-direction:column;gap:1px}.wk .tp b{font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.wk .tp span{font-size:12px;color:var(--l2);white-space:nowrap}.wk .tp .gly{width:28px;height:28px;border-radius:8px}
 .wk .dv{display:flex;align-items:center;gap:10px;min-height:40px;font-size:14px}.wk .dv b{flex:1;font-weight:600;line-height:1.3;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}.wk .dv span{font-size:12px;color:var(--l2);white-space:nowrap}
 .wk .es{padding:22px 16px;display:flex;flex-direction:column;align-items:center;text-align:center;gap:8px}.wk .es .gly{width:48px;height:48px;border-radius:14px;font-size:20px;opacity:.9;box-shadow:0 8px 20px rgba(0,0,0,.15)}.wk .es b{font-size:16px;font-weight:700;margin-top:4px}.wk .es p{margin:0;font-size:13px;line-height:1.45;color:var(--l2);max-width:300px}
 .wk .cn{display:inline-flex!important;align-items:center;gap:6px;min-height:44px!important;padding:0 20px!important;border-radius:22px!important;margin-top:4px;font-size:14px;font-weight:600;color:#fff;background:var(--bl)!important;box-shadow:0 4px 14px color-mix(in srgb,var(--bl) 35%,transparent)!important}
-@keyframes rise{from{transform:translateY(10px);opacity:0}}.wk .hero,.wk .sec,.wk .pt{animation:rise .6s ${SP} both}
+
 @media (max-width:440px){.wk .hero{grid-template-columns:minmax(0,1fr)!important}.wk .hd2{flex-direction:row;flex-wrap:wrap}.wk .dl2{flex:1 1 140px}.wk{padding:12px}.wk .vp{margin:0 -12px;height:420px}.wk .pg{padding:2px 12px 18px}.wk .tb button{font-size:11.5px;gap:4px}.wk .tb button i{display:none}.wk .hero{padding:14px;min-height:0}.wk .hv{font-size:34px}.wk .sp svg{height:46px}.wk .dc{font-size:11px;padding:3px 8px}.wk .wkc .r{display:none}.wk .sg b{font-size:16px}.wk .ph0 .big b{font-size:34px}}
 @media (prefers-reduced-motion:reduce){.wk *,.wk *::before,.wk *::after{animation:none!important;transition:none!important}.wk .sp .ln{stroke-dashoffset:0}.wk .sp .ar,.wk .sp .dt{opacity:1}}`;
 const e=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
@@ -190,25 +286,44 @@ const rd=s.reach_delta_pct!=null?Math.abs(s.reach_delta_pct)+'% WoW':s.reach_del
 const dv=s.daily,mx=dv?Math.max(1,...dv.map(x=>x||0)):1,tp=s.top_post;
 return`<div class="ph0" style="--g:${PM[k].g}"><span class="pn">${gly(k)}${e(nm)}</span>${s.followers!=null?`<div class="big"><b>${num(s.followers)}</b><span>followers</span></div>`:''}${s.followers_delta!=null?`<span class="dc ${s.followers_delta>0?'up':s.followers_delta<0?'dn':''}">${sgn(s.followers_delta,num)} this week</span>`:''}</div>
 <div class="sg">${[[e(s.reach_label||PM[k].reach)+', 7d',s.reach_7d,rd,rds],['Likes',s.likes],['Comments',s.comments],['Shares',s.shares],['Saves',s.saves],['Profile visits',s.profile_views]].filter(x=>x[1]!=null).map(x=>st(...x)).join('')}</div>
-${dv?`<div class="sec gl"><div class="st">${e(s.reach_label||PM[k].reach)} by day</div><div class="bars" style="--g:${PM[k].g}">${dv.map((v,i)=>`<i style="height:${Math.max(4,Math.round((v||0)/mx*100))}%;animation-delay:${i*50}ms" title="${num(v||0)}"></i>`).join('')}</div><div class="bl">${'MTWTFSS'.split('').map(x=>`<span>${x}</span>`).join('')}</div></div>`:''}
+${dv?`<div class="sec gl"><div class="st">${e(s.reach_label||PM[k].reach)} by day</div><div class="bars" style="--g:${PM[k].g}">${dv.map((v,i)=>`<i style="height:${Math.max(4,Math.round((v||0)/mx*100))}%" title="${num(v||0)}"></i>`).join('')}</div><div class="bl">${'MTWTFSS'.split('').map(x=>`<span>${x}</span>`).join('')}</div></div>`:''}
 ${tp?(tp.link?`<a class="tp" href="${e(tp.link)}" target="_blank" rel="noopener">`:'<div class="tp">')+`${gly(k)}<span class="tx"><b>Top: ${e(tp.title)}</b><span>${[tp.views!=null?num(tp.views)+' views':'',tp.posted?'posted '+e(tp.posted):''].filter(Boolean).join(' · ')}</span></span>${tp.link?I('play',16):''}`+(tp.link?'</a>':'</div>'):''}
 ${dlv(k)}`}
 A.innerHTML=`<style>${css}</style><div class="wk"><div class="hd"><span class="ic">${I('trophy',18)}</span><span class="tt2"><span class="ttl">Concierge · Week</span><span class="rng">${e(D.week.replace(/^\d{4}-W/,'Week '))} · ${e(D.range||'')}</span></span></div>
 <div class="tb" role="tablist" aria-label="Week pages"><span class="th"></span><button role="tab" data-p="0" aria-selected="true" class="on">Overview</button>${PK.map((k,i)=>`<button role="tab" data-p="${i+1}" aria-selected="false" aria-label="${e(pname(k))}"><i class="${PL[k]&&PL[k].stats?'':'off'}" style="--g:${PM[k].g}"></i>${e(PM[k].tab)}</button>`).join('')}</div>
 <div class="vp"><div class="tr"><section class="pg" role="tabpanel" aria-label="Overview">${hero()}${insights()}${tiles()}${moved()}${next()}</section>${PK.map(k=>`<section class="pg" role="tabpanel" aria-label="${e(pname(k))}">${page(k)}</section>`).join('')}</div></div></div>`;
 const R=A.querySelector('.wk'),tr=R.querySelector('.tr'),th=R.querySelector('.th'),vp=R.querySelector('.vp'),N=PK.length+1;
-function go(i){cur=Math.max(0,Math.min(N-1,i));tr.style.transform=`translateX(${-cur*100}%)`;th.style.transform=`translateX(${cur*100}%)`;R.querySelectorAll('[data-p]').forEach(b=>{const on=+b.dataset.p==cur;b.classList.toggle('on',on);b.setAttribute('aria-selected',on)});R.querySelectorAll('.pg').forEach((p,j)=>p.inert=j!=cur)}
+/* pages: the track and the segmented thumb are driven together by one smooth spring (WAAPI). A new target (tap, key, swipe)
+ starts from where the track is now with its current velocity; a swipe follows the finger and hands its release velocity to the
+ spring. Reduced motion: no travel, the new page crossfades in. */
+const now=()=>performance.now();let pa=null;tr.style.transition=th.style.transition='none';
+const setP=p=>{tr.style.transform=`translateX(${-p*100}%)`;th.style.transform=`translateX(${p*100}%)`};
+const posNow=()=>pa?pa.p0+(pa.to-pa.p0)*pa.c.u((now()-pa.t0)/1000):cur,velNow=()=>pa?(pa.to-pa.p0)*pa.c.du((now()-pa.t0)/1000):0;
+const halt=()=>{const p=posNow();if(pa){pa.a.forEach(x=>x.cancel());pa=null;setP(p)}return p};
+const seen=new Set();function grow(i){if(seen.has(i))return;seen.add(i);if(MX.R())return;const c=MX.curve('smooth');(R.querySelectorAll('.pg')[i]||R).querySelectorAll(':scope .bars i').forEach((b,j)=>b.animate([{transform:'scaleY(0)'},{transform:'none'}],{duration:c.d,easing:c.e,delay:90+j*30,fill:'backwards'}))}
+function go(i,v,from){const p0=from!=null?from:posNow(),vv=v!=null?v:velNow();if(pa){pa.a.forEach(x=>x.cancel());pa=null}
+cur=Math.max(0,Math.min(N-1,i));setP(cur);R.querySelectorAll('[data-p]').forEach(b=>{const on=+b.dataset.p==cur;b.classList.toggle('on',on);b.setAttribute('aria-selected',on)});R.querySelectorAll('.pg').forEach((p,j)=>p.inert=j!=cur);grow(cur);
+if(Math.abs(p0-cur)<.001)return;if(MX.R()){if(Math.round(p0)!=cur)MX.fade(R.querySelectorAll('.pg')[cur],0,1);return}
+const c=MX.curve('smooth',vv/(cur-p0)),o={duration:c.d,easing:c.e},s={p0,to:cur,c,t0:now(),a:[tr.animate([{transform:`translateX(${-p0*100}%)`},{transform:`translateX(${-cur*100}%)`}],o),th.animate([{transform:`translateX(${p0*100}%)`},{transform:`translateX(${cur*100}%)`}],o)]};
+pa=s;s.a[0].finished.then(()=>{if(pa===s)pa=null}).catch(()=>{})}
 R.querySelectorAll('[data-p]').forEach(b=>b.onclick=()=>go(+b.dataset.p));R.querySelectorAll('[data-go]').forEach(b=>b.onclick=()=>go(+b.dataset.go));
 R.querySelector('.tb').addEventListener('keydown',ev=>{if(ev.key=='ArrowRight'||ev.key=='ArrowLeft'){go(cur+(ev.key=='ArrowRight'?1:-1));R.querySelector(`[data-p="${cur}"]`).focus()}});
-R.querySelectorAll('[data-cn]').forEach(b=>b.onclick=()=>sendPrompt(`[Week · ${D.week}] ${CONNECT[b.dataset.cn]}, and add them to weekly-stats.json under ${D.week}.${b.dataset.cn}.`));
-/* swipe between pages: horizontal drags move the track, vertical ones stay native scroll */
-let sx=null,sy=0,dx=0,drag=false;vp.addEventListener('pointerdown',ev=>{if(ev.pointerType=='mouse'&&ev.button)return;sx=ev.clientX;sy=ev.clientY;dx=0;drag=false});
-vp.addEventListener('pointermove',ev=>{if(sx==null)return;const x=ev.clientX-sx,y=ev.clientY-sy;if(!drag&&Math.abs(x)>10&&Math.abs(x)>Math.abs(y)*1.2){drag=true;tr.classList.add('drag');try{vp.setPointerCapture(ev.pointerId)}catch(_){}}if(drag){dx=(cur==0&&x>0)||(cur==N-1&&x<0)?x/3:x;tr.style.transform=`translateX(calc(${-cur*100}% + ${dx}px))`}});
-const end=()=>{if(sx==null)return;sx=null;if(!drag)return;tr.classList.remove('drag');const w=vp.clientWidth;go(dx<-w*.18?cur+1:dx>w*.18?cur-1:cur);drag=false;const stop=ev=>{ev.stopPropagation();ev.preventDefault()};vp.addEventListener('click',stop,{capture:true,once:true});setTimeout(()=>vp.removeEventListener('click',stop,{capture:true}),0)};
+R.querySelectorAll('[data-cn]').forEach(b=>b.onclick=()=>{MX.pop(b,.94,'snappy');sendPrompt(`[Week · ${D.week}] ${CONNECT[b.dataset.cn]}, and add them to weekly-stats.json under ${D.week}.${b.dataset.cn}.`)});
+/* swipe between pages: horizontal drags move the track, vertical ones stay native scroll. Grabbing a moving track stops it where it is. */
+let sx=null,sx0=0,sy=0,dx=0,drag=false,base=0,dp=0,smp=[];vp.addEventListener('pointerdown',ev=>{if(ev.pointerType=='mouse'&&ev.button)return;sx=sx0=ev.clientX;sy=ev.clientY;dx=0;drag=false});
+vp.addEventListener('pointermove',ev=>{if(sx==null)return;const x=ev.clientX-sx0,y=ev.clientY-sy;if(!drag&&Math.abs(x)>10&&Math.abs(x)>Math.abs(y)*1.2){drag=true;tr.classList.add('drag');try{vp.setPointerCapture(ev.pointerId)}catch(_){}base=dp=halt();sx=ev.clientX;smp=[];try{getSelection().removeAllRanges()}catch(_){}}
+if(drag){dx=(cur==0&&x>0)||(cur==N-1&&x<0)?x/3:x;smp.push([ev.timeStamp,ev.clientX]);while(smp.length>2&&ev.timeStamp-smp[0][0]>90)smp.shift();if(MX.R())return;
+let p=base-(ev.clientX-sx)/vp.clientWidth;if(p<0)p/=3;else if(p>N-1)p=N-1+(p-N+1)/3;dp=p;setP(p)}});
+const end=()=>{if(sx==null)return;sx=null;if(!drag)return;tr.classList.remove('drag');const w=vp.clientWidth,r=MX.R(),f=smp.length>1?smp[smp.length-1]:null,o=smp[0],vx=f&&f[0]>o[0]?(f[1]-o[1])/(f[0]-o[0])*1000:0,at=r?cur:dp;
+/* same 18% rule as before, measured from where the drag started; a quick flick (>400px/s) also turns the page */
+let to=Math.abs(vx)>400?(vx<0?Math.floor(at+.001)+1:Math.ceil(at-.001)-1):dx<-w*.18?Math.round(base)+1:dx>w*.18?Math.round(base)-1:Math.round(base);
+go(to,r?0:-vx/w,at);drag=false;const stop=ev=>{ev.stopPropagation();ev.preventDefault()};vp.addEventListener('click',stop,{capture:true,once:true});setTimeout(()=>vp.removeEventListener('click',stop,{capture:true}),0)};
 vp.addEventListener('pointerup',end);vp.addEventListener('pointercancel',end);go(0);
-/* count the hero number up once (the final value is already in the DOM). The clock starts at the first frame and every
- frame is clamped to 0..final, so it can never show a negative or overshoot value (a hidden iframe can hand rAF an earlier time). */
-const hv=A.querySelector('.hv[data-to]');if(hv&&hv.dataset.to&&!matchMedia('(prefers-reduced-motion:reduce)').matches&&window.requestAnimationFrame){const to=+hv.dataset.to,f=hv.dataset.f=='money'?usd:num;let ok=false,t0=null;if(!isFinite(to)||to<=0){hv.textContent=f(isFinite(to)?to:0)}else{const step=t=>{if(t0==null)t0=t;const p=Math.max(0,Math.min(1,(t-t0)/900)),q=1-Math.pow(1-p,3);hv.textContent=f(Math.round(to*Math.max(0,Math.min(1,q))));if(p<1)requestAnimationFrame(step);else{ok=true;hv.textContent=f(to)}};requestAnimationFrame(step)}setTimeout(()=>{if(!ok)hv.textContent=f(to)},1400)}
+MX.enter(R,{y:12});MX.enter(R.querySelectorAll('.pg:first-child>*'),{y:8,step:28});
+/* count the hero number up once (the final value is already in the DOM), on the smooth spring (critically damped, so no overshoot).
+ The clock starts at the first frame and every frame is clamped to 0..final, so it can never show a negative or overshoot value
+ (a hidden iframe can hand rAF an earlier time). */
+const hv=A.querySelector('.hv[data-to]');if(hv&&hv.dataset.to&&!matchMedia('(prefers-reduced-motion:reduce)').matches&&window.requestAnimationFrame){const to=+hv.dataset.to,f=hv.dataset.f=='money'?usd:num,C=MX.curve('smooth');let ok=false,t0=null;if(!isFinite(to)||to<=0){hv.textContent=f(isFinite(to)?to:0)}else{const step=t=>{if(t0==null)t0=t;const ms=Math.max(0,t-t0),q=Math.max(0,Math.min(1,C.u(ms/1000)));hv.textContent=f(Math.round(to*q));if(ms<C.d)requestAnimationFrame(step);else{ok=true;hv.textContent=f(to)}};requestAnimationFrame(step)}setTimeout(()=>{if(!ok)hv.textContent=f(to)},1400)}
 /* Ask Concierge bar (standard in every Concierge widget): one-line pill at the bottom of the card. The arrow shows once there is text;
  Enter or the arrow calls sendPrompt("[<what is on screen>] <text>"), clears the field and shows "Sent to chat" for a moment. */
 function askBar(sel,ctx,look){const b=document.createElement('form');b.className='askc '+look;b.setAttribute('autocomplete','off');

@@ -87,31 +87,126 @@ skin('.gm',`
 & .sv .of span{background:var(--a-ground);color:var(--a-label)}& .sv .of input,& .sv .pk input{box-shadow:inset 0 0 0 1px var(--a-stone)}& .sv .of input:focus,& .sv .pk input:focus{box-shadow:inset 0 0 0 1.5px var(--a-ink)}& .sv .of:focus-within span{color:var(--a-ink)}
 & .sv .pb button{color:var(--a-ink);font-weight:500}& .sv .pb .pr{background:var(--a-ember)!important;color:var(--a-on)}
 & .vw.in-r{animation:aceInR var(--a-b) var(--a-out)}& .vw.in-l{animation:aceInL var(--a-b) var(--a-out)}@keyframes aceInR{from{transform:translateX(16px);opacity:0}}@keyframes aceInL{from{transform:translateX(-16px);opacity:0}}`);stampSync('.tb','after');
-/*SKIN:END*/const SP='cubic-bezier(.32,.72,0,1)';
+/*SKIN:END*/
+/*MOTION:BEGIN*/
+/* Motion layer (shared; synced into every template by _motion/sync.py, edit it there). Springs, not curves: every animation is a
+ damped spring described like SwiftUI (response = seconds per oscillation, damping fraction), sampled into a CSS linear() easing
+ for CSS and WAAPI, so it runs on the compositor (transform, opacity, clip-path only). Three presets:
+   snappy (.25s, .86): direct feedback. Press, toggle, option select, segmented thumb. Settles in 250ms.
+   smooth (.30s, 1.0): layout. Expand and collapse, FLIP moves, tab content, number rolls, card and row entry. 95% in 230ms, settled 360ms.
+   bouncy (.32s, .68): confirmation. Tick pop, toast in. 95% there in 145ms, a 5% overshoot settles by 355ms.
+ Every move is interruptible: a new target starts from where the element is now, and expand/collapse also keeps its velocity.
+ prefers-reduced-motion: no travel, no scale, no overshoot; changes crossfade in 150ms. CSS gets the curves as custom properties on
+ #app: var(--mx-snappy), var(--mx-smooth), var(--mx-bouncy) are "<duration> <easing>" pairs, e.g. transition:transform var(--mx-smooth). */
+const MX=(()=>{const RM=matchMedia('(prefers-reduced-motion: reduce)'),R=()=>RM.matches,now=()=>performance.now(),
+LIN=(()=>{try{return CSS.supports('transition-timing-function','linear(0, 1)')}catch(e){return false}})(),
+SPR={snappy:[.25,.86,'cubic-bezier(.25,.9,.3,1)'],smooth:[.3,1,'cubic-bezier(.2,.85,.25,1)'],bouncy:[.32,.68,'cubic-bezier(.3,1.35,.5,1)']},CV={};
+/* x(t): displacement of a unit spring released at 1 with velocity v0 (units/s), heading to 0 */
+function sx(resp,z,v0){const w=2*Math.PI/resp;if(z<1){const wd=w*Math.sqrt(1-z*z),B=(v0+z*w)/wd;return t=>Math.exp(-z*w*t)*(Math.cos(wd*t)+B*Math.sin(wd*t))}const B=v0+w;return t=>(1+B*t)*Math.exp(-w*t)}
+/* curve(name,v) -> {e: easing, d: ms, u(t): progress 0..1 at t seconds, du(t): progress per second}; v is the starting progress velocity */
+function curve(n,v=0){v=Math.max(-40,Math.min(40,Math.round(v*4)/4));const k=n+v;if(CV[k])return CV[k];const[r,z,fb]=SPR[n]||SPR.smooth,x=sx(r,z,-v);
+let T=0;for(let t=0;t<1.2;t+=1/240)if(Math.abs(x(t))>.005)T=t;T=Math.max(.12,T+1/240);
+const N=Math.max(12,Math.ceil(T*90)),pts=[];for(let i=0;i<=N;i++){const t=T*i/N;pts.push(i==N?1:+(1-x(t)).toFixed(4))}
+const u=t=>t>=T?1:1-x(t),du=t=>t>=T?0:(x(Math.max(0,t-.002))-x(t+.002))/.004;return CV[k]={e:LIN?`linear(${pts.join(',')})`:fb,d:Math.round(T*1000),u,du}}
+const card=()=>A.querySelector(':scope>:not(style):not(script):not(link)'),ease=n=>{const c=curve(n);return c.d+'ms '+c.e};
+/* one global sheet: rolling-digit ghosts and the reduced-motion crossfade; lives in the document (or shadow root), so it survives re-renders */
+(()=>{const r=A.getRootNode&&A.getRootNode(),h=r&&r.host?r:A.ownerDocument.head;if(!h||h.querySelector('style[data-mx]'))return;const s=A.ownerDocument.createElement('style');s.setAttribute('data-mx','');
+s.textContent='.mx-d{display:inline-block;position:relative;white-space:pre}.mx-g{position:absolute;left:0;top:0;pointer-events:none}.mx-g::before{content:attr(data-c)}';h.appendChild(s)})();
+const vars=()=>{for(const n in SPR)A.style.setProperty('--mx-'+n,R()?'1ms linear':ease(n))};vars();try{RM.addEventListener('change',vars)}catch(e){}
+const anim=(el,kf,n,o={})=>{const c=typeof n=='object'?n:curve(n);return el.animate(kf,{duration:c.d,easing:c.e,fill:'both',...o})};
+const fade=(el,a,b,ms=150)=>el&&el.animate([{opacity:a},{opacity:b}],{duration:ms,easing:'ease-out'});
+
+/* disclose(row, open, set, {body, root}): expand or collapse one row with matched geometry. set(bool) is the template's own class
+ toggle. The layout changes once; what follows the row (rows below, footer, the card's bottom edge) is FLIPped with additive
+ translateY, the row reveals or hides its new height with clip-path, so no frame does layout. A collapse keeps the open layout
+ until the spring lands, then commits. A second call mid-flight reverses from the current position and velocity. */
+const ST=new WeakMap();
+function after(el,root){const out=[];while(el&&el!==root&&el.parentElement){let s=el.nextElementSibling;while(s){const p=getComputedStyle(s).position;if(p!='absolute'&&p!='fixed')out.push(s);s=s.nextElementSibling}el=el.parentElement}return out}
+function scrollers(el,root){const out=[];while(el&&el!==root){el=el.parentElement;if(el&&el.scrollHeight>el.clientHeight+1)out.push([el,el.scrollTop])}return out}
+function disclose(row,open,set,o={}){const st=ST.get(row);if(st&&st.to==open)return;const root=o.root||card(),body=o.body?row.querySelector(o.body):null;
+if(body)body.style.transition='none';
+if(R()||!row.isConnected||!root){if(st)st.stop();set(open);if(open&&R())fade(body,0,1);return}
+let p0=open?0:1,v=0;if(st){p0=st.p();v=st.v();st.stop()}
+const F=after(row,root),E=[row,root,...F],sc=scrollers(row,root),rect=()=>E.map(e=>e.getBoundingClientRect()),keep=()=>sc.forEach(([e,t])=>e.scrollTop=t);
+const oa=sc.map(([e])=>{const v=e.style.overflowAnchor;e.style.overflowAnchor='none';return v});let a,b;if(st||!open){b=rect();set(false);a=rect();set(true);keep()}else{a=rect();set(true);b=rect();keep()}
+sc.forEach(([e],i)=>e.style.overflowAnchor=oa[i]);const dh=b[0].height-a[0].height,dr=b[1].height-a[1].height,dy=F.map((e,i)=>b[i+2].top-a[i+2].top);
+if(Math.abs(dh)<.5){if(!open)set(false);return}
+const to=open?1:0,c=curve('smooth',(to-p0)?v/(to-p0):0),rr=e=>parseFloat(getComputedStyle(e).borderBottomLeftRadius)||0,R0=rr(row),R1=rr(root),
+clip=(d,p,r,t)=>`inset(${t}px 0 ${Math.max(0,d*(1-p)).toFixed(1)}px 0 round ${r}px)`,ty=(d,p)=>`translateY(${(-d*(1-p)).toFixed(1)}px)`,
+an=[anim(row,[{clipPath:clip(dh,p0,R0,-24)},{clipPath:clip(dh,to,R0,-24)}],c)];
+if(Math.abs(dr)>.5)an.push(anim(root,[{clipPath:clip(dr,p0,R1,0)},{clipPath:clip(dr,to,R1,0)}],c));
+F.forEach((e,i)=>{if(Math.abs(dy[i])>.5)an.push(anim(e,[{transform:ty(dy[i],p0)},{transform:ty(dy[i],to)}],c,{composite:'add'}))});
+if(body)an.push(anim(body,[{opacity:p0,transform:`translateY(${(-6*(1-p0)).toFixed(1)}px)`},{opacity:to,transform:`translateY(${-6*(1-to)}px)`}],c,{composite:'replace'}));
+const el=()=>(an[0].currentTime||0)/1000,s={to:open,p:()=>p0+(to-p0)*c.u(el()),v:()=>(to-p0)*c.du(el()),stop(){an.forEach(x=>x.cancel());ST.delete(row)}};ST.set(row,s);
+an[0].finished.then(()=>{if(ST.get(row)!==s)return;if(!open)set(false);s.stop()}).catch(()=>{})}
+
+/* flip(sel, mutate, n): anything matching sel moves from where it was to where mutate() puts it (re-render safe: matched by
+ data-mx key, else by selector order). Width changes scale on X from the left (segmented thumbs, rails). Returns the new elements. */
+function flip(sel,mutate,n='smooth'){const key=(e,i)=>e.dataset.mx||(sel+'#'+i),q=()=>[...A.querySelectorAll(sel)],m=new Map();q().forEach((e,i)=>m.set(key(e,i),e.getBoundingClientRect()));mutate();const els=q();if(R())return els;
+els.forEach((e,i)=>{const f=m.get(key(e,i));if(!f)return;const l=e.getBoundingClientRect(),dx=f.left-l.left,dy=f.top-l.top,sx=l.width?f.width/l.width:1;
+if(Math.abs(dx)<.5&&Math.abs(dy)<.5&&Math.abs(sx-1)<.01)return;anim(e,[{transformOrigin:'0 0',transform:`translate(${dx}px,${dy}px) scaleX(${sx})`},{transformOrigin:'0 0',transform:'none'}],n,{composite:'add',fill:'none'})});return els}
+
+/* swap(get, dir, mutate): tab and page switches. The old content leaves as a ghost (slide -dir and fade), the new content slides in
+ from dir and fades up, both on the smooth spring. The ghost is marked data-mx-ghost, aria-hidden and inert. dir 0 = crossfade only (also what reduced motion gets). Interruptible: a second
+ switch ghosts the content where it is, mid-flight. */
+let G=null;function swap(get,dir,mutate){const old=get(),root=card();if(G){G.remove();G=null}let g=null;
+if(old&&root&&old.isConnected){const r=old.getBoundingClientRect(),o=root.getBoundingClientRect(),cs=getComputedStyle(old);g=old.cloneNode(true);g.removeAttribute('id');g.querySelectorAll('[id]').forEach(x=>x.removeAttribute('id'));
+g.setAttribute('aria-hidden','true');g.setAttribute('data-mx-ghost','');g.inert=true;Object.assign(g.style,{position:'absolute',left:r.left-o.left-root.clientLeft+'px',top:r.top-o.top-root.clientTop+'px',width:r.width+'px',height:r.height+'px',margin:'0',pointerEvents:'none',zIndex:'0',transform:cs.transform=='none'?'':cs.transform,opacity:cs.opacity,animation:'none',boxSizing:'border-box'});
+g.querySelectorAll('*').forEach(x=>x.style.animation='none');g._st=old.scrollTop;g._sl=old.scrollLeft}
+mutate();const nw=get(),d=R()?0:dir,host=card();if(g&&host){host.insertBefore(g,host.firstChild);g.scrollTop=g._st;g.scrollLeft=g._sl}
+if(g){G=g;const c=curve('smooth');g.animate([{opacity:+g.style.opacity||1,transform:g.style.transform||'none'},{opacity:0,transform:`translateX(${-d*28}px)`}],{duration:R()?150:Math.round(c.d*.6),easing:R()?'ease-out':c.e,fill:'both'}).finished.then(()=>{g.remove();if(G===g)G=null}).catch(()=>{})}
+if(nw){if(R())fade(nw,0,1);else anim(nw,[{opacity:0,transform:`translateX(${d*28}px)`},{opacity:1,transform:'none'}],'smooth',{fill:'none'})}return nw}
+
+/* text(el, s): set text; numbers inside roll digit by digit (up when they grow, down when they shrink), like iOS numeric text.
+ Words around them stay put. A different shape crossfades. textContent is right as soon as this returns (ghost digits are CSS only). */
+function text(el,s){if(!el)return;s=String(s);const o=el.getAttribute('data-mxt')??el.textContent;if(o===s&&el.textContent===s)return;el.setAttribute('data-mxt',s);
+if(R()||!el.isConnected||o===s){el.textContent=s;if(R()&&o!==s)fade(el,.35,1);return}const sp=x=>x.split(/(\d[\d.,]*)/),P=sp(o),Q=sp(s),nm=x=>parseFloat(x.replace(/,/g,''))||0;
+if(P.length!=Q.length||P.some((t,i)=>i%2==0&&t!==Q[i])){el.textContent='';const w=document.createElement('span');w.className='mx-d';w.textContent=s;el.append(w);anim(w,[{opacity:0,transform:'translateY(.2em)'},{opacity:1,transform:'none'}],'smooth',{fill:'none'});return}
+el.textContent='';const c=curve('smooth');Q.forEach((t,i)=>{if(i%2==0||t===P[i]){if(t)el.append(t);return}const up=nm(t)>=nm(P[i])?1:-1,ot=P[i].padStart(t.length,' ');
+[...t].forEach((ch,j)=>{const was=ot[ot.length-t.length+j]??'';if(ch===was){el.append(ch);return}const w=document.createElement('span');w.className='mx-d';w.textContent=ch;el.append(w);
+w.animate([{transform:`translateY(${.55*up}em)`,opacity:0},{transform:'none',opacity:1}],{duration:c.d,easing:c.e,delay:j*18});
+if(was.trim()){const gh=document.createElement('span');gh.className='mx-g';gh.setAttribute('data-c',was);gh.setAttribute('aria-hidden','true');w.append(gh);
+gh.animate([{transform:'none',opacity:1},{transform:`translateY(${-.55*up}em)`,opacity:0}],{duration:Math.round(c.d*.7),easing:c.e,delay:j*18,fill:'both'}).finished.then(()=>gh.remove()).catch(()=>{})}})})}
+
+/* pop(el, from): a tick or a selection lands with a small spring scale; a second tap restarts from the current scale. */
+const PO=new WeakMap();function pop(el,s=.82,n='bouncy'){if(!el||R())return;const pv=PO.get(el);let f=s;if(pv){const k=pv.c.u((pv.a.currentTime||0)/1000);f=Math.min(s,pv.s+(1-pv.s)*k);pv.a.cancel()}
+const c=curve(n),a=el.animate([{transform:`scale(${f})`},{transform:'scale(1)'}],{duration:c.d,easing:c.e,composite:'add'});PO.set(el,{a,c,s:f});a.finished.then(()=>PO.get(el)&&PO.get(el).a===a&&PO.delete(el)).catch(()=>{})}
+
+/* toast(el) springs a toast or snackbar in; out(el) lets it go (fade and drop, 160ms) and removes it. */
+function toast(el,y=18){if(!el)return;el.style.animation='none';if(R())return void fade(el,0,1);anim(el,[{opacity:0,transform:`translateY(${y}px) scale(.96)`},{opacity:1,transform:'none'}],'bouncy',{fill:'none'})}
+function out(el,done){if(!el)return;if(el._mxo)return;el._mxo=1;el.style.pointerEvents='none';const a=el.animate([{opacity:getComputedStyle(el).opacity},{opacity:0}],{duration:160,easing:'cubic-bezier(.4,0,1,1)',fill:'forwards'});if(!R())el.animate([{transform:'none'},{transform:'translateY(8px) scale(.98)'}],{duration:160,easing:'cubic-bezier(.4,0,1,1)',fill:'forwards',composite:'add'});
+a.finished.then(()=>{el.remove();done&&done()}).catch(()=>{el.remove();done&&done()})}
+
+/* enter(els, {y, step, max}): card and row entry, a short rise and fade, staggered (step ms per row, capped at max rows). */
+function enter(els,o={}){if(!els)return;els=els.length!=null?[...els]:[els];const y=o.y??10,st=o.step??28,mx=o.max??8;els.forEach((e,i)=>{if(R())return void fade(e,0,1,180);
+const dl=Math.min(i,mx)*st;anim(e,[{transform:`translateY(${y}px)`},{transform:'none'}],'smooth',{delay:dl,fill:'backwards',composite:'add'});e.animate([{opacity:0},{opacity:1}],{duration:220,delay:dl,easing:'cubic-bezier(.2,0,0,1)',fill:'backwards'})})}
+
+return{R,curve,ease,disclose,flip,swap,text,pop,toast,out,enter,fade}})();
+/*MOTION:END*/
 const css=`.gm{--bg:#fff;--pop:#fff;--tx:#1f1f1f;--t2:#444746;--t3:#5f6368;--ln:#e0e3e7;--ol:#c4c7c5;--ac:#0b57d0;--acT:#fff;--acH:#0842a0;--hv:rgba(68,71,70,.08);--pill:#e9eef6;--fld:#f6f8fc;--sb:#1f1f1f;--sbT:#f2f2f2;--sbA:#a8c7fa;--bad:#b3261e;--sh:0 1px 2px rgba(60,64,67,.3),0 2px 6px 2px rgba(60,64,67,.15);
 --lgB:#c6efd4;--lgT:#0d652d;--lbB:#d3e3fd;--lbT:#0842a0;--lrB:#fad2cf;--lrT:#a50e0e;--loB:#feefc3;--loT:#7a4a00;--lpB:#e8def8;--lpT:#4a2c8a;--lnB:#e8eaed;--lnT:#3c4043;
 font-family:"Google Sans",Roboto,-apple-system,BlinkMacSystemFont,system-ui,sans-serif;background:var(--bg);color:var(--tx);border-radius:20px;padding:16px;display:flex;flex-direction:column;gap:12px;overflow:hidden;width:100%;min-width:0;box-sizing:border-box;position:relative;-webkit-font-smoothing:antialiased;color-scheme:light}
 @media (prefers-color-scheme:dark){.gm{--bg:#202124;--pop:#2d2e30;--tx:#e3e3e3;--t2:#c4c7c5;--t3:#9aa0a6;--ln:#3c4043;--ol:#5f6368;--ac:#a8c7fa;--acT:#062e6f;--acH:#d3e3fd;--hv:rgba(227,227,227,.08);--pill:#3c4043;--fld:#2d2e30;--sb:#e3e3e3;--sbT:#1f1f1f;--sbA:#0b57d0;--bad:#f2b8b5;--sh:0 1px 3px rgba(0,0,0,.5),0 4px 8px 3px rgba(0,0,0,.25);
 --lgB:#0d652d;--lgT:#c6efd4;--lbB:#0842a0;--lbT:#d3e3fd;--lrB:#8c1d18;--lrT:#fad2cf;--loB:#7a4a00;--loT:#feefc3;--lpB:#4a2c8a;--lpT:#e8def8;--lnB:#3c4043;--lnT:#e3e3e3;color-scheme:dark}}
-.gm *{box-sizing:border-box;min-width:0}.gm button,.gm select{all:unset;box-sizing:border-box!important;border:0!important;box-shadow:none!important;background:transparent!important;min-height:0!important;height:auto!important;cursor:pointer;-webkit-tap-highlight-color:transparent;transition:transform .3s ${SP},background-color .2s,color .2s}.gm button:active{transform:scale(.95)}.gm button:focus,.gm button:focus-visible,.gm select:focus{outline:none!important}.gm button:focus-visible{box-shadow:0 0 0 2px var(--ac)!important}
+.gm *{box-sizing:border-box;min-width:0}.gm button,.gm select{all:unset;box-sizing:border-box!important;border:0!important;box-shadow:none!important;background:transparent!important;min-height:0!important;height:auto!important;cursor:pointer;-webkit-tap-highlight-color:transparent;transition:transform var(--mx-snappy),background-color .2s,color .2s}.gm button:active{transform:scale(.95)}.gm button:focus,.gm button:focus-visible,.gm select:focus{outline:none!important}.gm button:focus-visible{box-shadow:0 0 0 2px var(--ac)!important}
 .gm svg{display:block;flex:none;fill:currentColor}
 .gm .tb{display:flex;align-items:center;gap:6px;min-height:44px}.gm .lg{width:26px;flex:none}.gm .ttl{font-size:16px;font-weight:500;letter-spacing:-.01em;white-space:nowrap;flex:none;margin-left:2px}.gm .sp{flex:1}
-.gm .ob{display:inline-flex!important;align-items:center;gap:6px;font-size:13px;font-weight:500;color:var(--t2);padding:0 12px!important;height:32px!important;border-radius:999px!important;box-shadow:inset 0 0 0 1px var(--ol)!important;white-space:nowrap;flex:none}.gm .ob.on{background:var(--ac)!important;color:var(--acT);box-shadow:none!important}.gm .ob[disabled]{opacity:.5;cursor:default}.gm .ob.bump{animation:bump .5s ${SP}}@keyframes bump{40%{transform:scale(1.12)}}
+.gm .ob{display:inline-flex!important;align-items:center;gap:6px;font-size:13px;font-weight:500;color:var(--t2);padding:0 12px!important;height:32px!important;border-radius:999px!important;box-shadow:inset 0 0 0 1px var(--ol)!important;white-space:nowrap;flex:none}.gm .ob.on{background:var(--ac)!important;color:var(--acT);box-shadow:none!important}.gm .ob[disabled]{opacity:.5;cursor:default}
 .gm .cnt{font-size:12px;color:var(--t3);white-space:nowrap;margin:0 2px 0 6px;flex:none;font-variant-numeric:tabular-nums}
 .gm .ib{width:40px;height:40px!important;border-radius:50%!important;display:grid!important;place-items:center;color:var(--t2);flex:none}.gm .ib:hover{background:var(--hv)!important}.gm .ib[disabled]{opacity:.35;cursor:default}
-.gm .vw{display:flex;flex-direction:column;gap:12px}.gm .vw.in-r{animation:inR .5s ${SP}}.gm .vw.in-l{animation:inL .5s ${SP}}@keyframes inR{from{transform:translateX(28px);opacity:0}}@keyframes inL{from{transform:translateX(-28px);opacity:0}}
+.gm .vw{display:flex;flex-direction:column;gap:12px}
 .gm .sj{display:flex;align-items:center;flex-wrap:wrap;gap:6px 8px;padding:0 2px}.gm .sj h2{all:unset;font-size:19px;line-height:1.3;font-weight:400;color:var(--tx);overflow-wrap:anywhere;margin-right:2px}
 .gm .lb{display:inline-flex;align-items:center;height:20px;padding:0 6px;border-radius:4px;font-size:12px;font-weight:500;white-space:nowrap;background:var(--lnB);color:var(--lnT)}.gm .lb.g{background:var(--lgB);color:var(--lgT)}.gm .lb.b{background:var(--lbB);color:var(--lbT)}.gm .lb.r{background:var(--lrB);color:var(--lrT)}.gm .lb.o{background:var(--loB);color:var(--loT)}.gm .lb.p{background:var(--lpB);color:var(--lpT)}
 .gm .ms{padding:4px 2px 2px}.gm .mh{display:flex!important;align-items:flex-start;gap:10px;width:100%;padding:4px 0!important}.gm .av{width:36px;height:36px;border-radius:50%;display:grid;place-items:center;color:#fff;font-size:16px;font-weight:500;flex:none;background:var(--bc)}
 .gm .mn{flex:1;display:flex;flex-direction:column;gap:1px}.gm .mn .l1{display:flex;align-items:baseline;gap:6px;white-space:nowrap;overflow:hidden}.gm .mn b{font-size:14px;font-weight:600;color:var(--tx);overflow:hidden;text-overflow:ellipsis;flex:0 1 auto}.gm .mn .em{font-size:12px;color:var(--t3);overflow:hidden;text-overflow:ellipsis;flex:0 1 auto}.gm .mn .l2{font-size:12px;color:var(--t3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .gm .dt{font-size:12px;color:var(--t3);white-space:nowrap;flex:none;padding-top:2px}
-.gm .mb{margin:8px 0 0 46px;font-size:14px;line-height:1.55;color:var(--tx);white-space:pre-wrap;overflow-wrap:anywhere}.gm .mb.cl{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}.gm .ms.col .mb,.gm .ms.col .dots{display:none}
+.gm .mb{margin:8px 0 0 46px;font-size:14px;line-height:1.55;color:var(--tx);white-space:pre-wrap;overflow-wrap:anywhere}.gm .mb.cl{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}.gm .ms.col .mb,.gm .ms.col .dots{display:none}.gm .hm:not(.on)>.mb,.gm .hm.on .hn>span,.gm .fx:not(.on){display:none}.gm .fx{display:flex;flex-direction:column;gap:8px}
 /* the thread + reply scroll as one block inside the card (card about 700px max); nothing is clamped or trimmed */
 .gm .vw{max-height:556px;overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;scrollbar-width:thin;margin:0 -4px;padding:0 4px 4px}.gm .vw.more::after{content:"";position:sticky;bottom:0;display:block;height:0;box-shadow:0 -10px 14px 6px var(--bg);pointer-events:none}.gm .vw>*{flex-shrink:0}
 .gm .bt{position:sticky;bottom:-8px;z-index:2;background:var(--bg);margin:0 -4px -8px;padding:6px 4px 8px;border-radius:0 0 12px 12px}
 .gm .hs{display:flex;flex-direction:column;border-bottom:1px solid var(--ln);padding-bottom:4px}.gm .hm{border-top:1px solid var(--ln)}.gm .hm:first-child{border-top:0}.gm .hr{display:flex!important;align-items:center;gap:10px;width:100%;min-height:44px!important;padding:4px 2px!important}.gm .hr .mi{width:28px;height:28px;font-size:13px}.gm .hn{flex:1;display:flex;align-items:baseline;gap:8px;white-space:nowrap;overflow:hidden}.gm .hn b{font-size:14px;font-weight:600;flex:none}.gm .hn span{font-size:13px;color:var(--t3);overflow:hidden;text-overflow:ellipsis}.gm .hm .mb{margin:0 0 8px 38px}
 .gm .dots{margin:6px 0 0 46px;display:inline-flex!important;align-items:center;justify-content:center;height:12px!important;padding:0 6px!important;border-radius:999px!important;background:var(--pill)!important;color:var(--t2)}.gm .dots svg{width:18px}.gm .dots:hover{background:var(--ol)!important}
-.gm .cm{border-radius:16px;box-shadow:var(--sh);background:var(--bg);padding:12px 14px;display:flex;flex-direction:column;gap:8px;transition:transform .45s ${SP},opacity .35s}.gm .cm.out{transform:translateY(-18px) scale(.97);opacity:0}.gm .cm.hd{transform:translateX(-24px);opacity:0}.gm .cm.dr{transform:translateY(16px) scale(.96);opacity:0}
+.gm .cm{border-radius:16px;box-shadow:var(--sh);background:var(--bg);padding:12px 14px;display:flex;flex-direction:column;gap:8px}
 @media (prefers-color-scheme:dark){.gm .cm{box-shadow:none;border:1px solid var(--ol)}}
 .gm .cr{display:flex;align-items:center;gap:4px;min-height:44px;position:relative}.gm .rp{display:inline-flex!important;align-items:center;color:var(--t2);height:36px!important;padding:0 2px 0 6px!important;border-radius:18px!important;flex:none}.gm .rp:hover{background:var(--hv)!important}
 .gm .to{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 10px 0 2px;border-radius:999px;background:var(--pill);font-size:13px;color:var(--tx);white-space:nowrap;overflow:hidden;flex:0 1 auto}.gm .to .mi{width:24px;height:24px;font-size:11.5px}.gm .to span{overflow:hidden;text-overflow:ellipsis}
@@ -121,14 +216,14 @@ font-family:"Google Sans",Roboto,-apple-system,BlinkMacSystemFont,system-ui,sans
 .gm textarea{all:unset;display:block;box-sizing:border-box;width:100%;white-space:pre-wrap;padding:12px 2px;font-size:14px;line-height:1.55;color:var(--tx);overflow:hidden;overflow-wrap:anywhere}
 .gm .bt{display:flex;align-items:center;gap:6px;position:relative}.gm .sd{display:inline-flex;height:40px;border-radius:20px;background:var(--ac);color:var(--acT);flex:none;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.15)}.gm .sd button{display:inline-flex!important;align-items:center;color:var(--acT);height:40px!important;font-size:14px;font-weight:500}.gm .sd button:hover{background:rgba(255,255,255,.12)!important}.gm .sd .s1{padding:0 16px 0 20px!important}.gm .sd .s2{padding:0 8px!important;border-left:1px solid color-mix(in srgb,var(--acT) 28%,transparent)!important}
 .gm .wc{font-size:12px;color:var(--t3);white-space:nowrap;margin-left:6px}.gm .wc.bad{color:var(--bad)}
-.gm .mu{position:absolute;z-index:6;background:var(--pop);border-radius:8px;padding:8px 0;min-width:210px;box-shadow:0 2px 6px 2px rgba(0,0,0,.15),0 1px 2px rgba(0,0,0,.3);transform-origin:bottom left;animation:mu .25s ${SP}}.gm .mu.dn{transform-origin:top left}@keyframes mu{from{transform:scale(.92);opacity:0}}
+.gm .mu{position:absolute;z-index:6;background:var(--pop);border-radius:8px;padding:8px 0;min-width:210px;box-shadow:0 2px 6px 2px rgba(0,0,0,.15),0 1px 2px rgba(0,0,0,.3);transform-origin:bottom left}.gm .mu.dn{transform-origin:top left}
 .gm .mu button{display:flex!important;align-items:center;gap:14px;width:100%;padding:0 16px!important;height:44px!important;font-size:14px;color:var(--tx);white-space:nowrap}.gm .mu button:hover{background:var(--hv)!important}.gm .mu button svg{color:var(--t2)}
-.gm .bn{display:flex;align-items:center;gap:10px;border-radius:16px;padding:10px 10px 10px 14px;background:var(--fld);font-size:13.5px;color:var(--t2);min-height:52px;animation:inR .45s ${SP}}.gm .bn svg{color:var(--t3)}.gm .bn span{flex:1}.gm .bn .ul{font-weight:500;color:var(--ac);padding:0 12px!important;height:40px!important;border-radius:20px!important;display:inline-flex!important;align-items:center}.gm .bn .ul:hover{background:var(--hv)!important}
-.gm .dn0{text-align:center;padding:26px 10px;display:flex;flex-direction:column;align-items:center;gap:6px;animation:inR .5s ${SP}}.gm .dn0 svg{color:var(--t3);width:40px}.gm .dn0 b{font-size:16px;font-weight:500}.gm .dn0 span{font-size:13px;color:var(--t3)}
-.gm{transition:padding-bottom .4s ${SP}}.gm.hs{padding-bottom:70px}.gm .snk{position:absolute;left:14px;bottom:14px;max-width:calc(100% - 28px);display:flex;align-items:center;gap:4px;background:var(--sb);color:var(--sbT);border-radius:4px;padding:2px 4px 2px 16px;min-height:44px;font-size:14px;box-shadow:0 3px 5px -1px rgba(0,0,0,.2),0 6px 10px rgba(0,0,0,.14);z-index:8;animation:snk .4s ${SP}}.gm .snk.bye{transition:transform .3s,opacity .3s;transform:translateY(12px);opacity:0}@keyframes snk{from{transform:translateY(24px);opacity:0}}
+.gm .bn{display:flex;align-items:center;gap:10px;border-radius:16px;padding:10px 10px 10px 14px;background:var(--fld);font-size:13.5px;color:var(--t2);min-height:52px}.gm .bn svg{color:var(--t3)}.gm .bn span{flex:1}.gm .bn .ul{font-weight:500;color:var(--ac);padding:0 12px!important;height:40px!important;border-radius:20px!important;display:inline-flex!important;align-items:center}.gm .bn .ul:hover{background:var(--hv)!important}
+.gm .dn0{text-align:center;padding:26px 10px;display:flex;flex-direction:column;align-items:center;gap:6px}.gm .dn0 svg{color:var(--t3);width:40px}.gm .dn0 b{font-size:16px;font-weight:500}.gm .dn0 span{font-size:13px;color:var(--t3)}
+.gm.hs{padding-bottom:70px}.gm .snk{position:absolute;left:14px;bottom:14px;max-width:calc(100% - 28px);display:flex;align-items:center;gap:4px;background:var(--sb);color:var(--sbT);border-radius:4px;padding:2px 4px 2px 16px;min-height:44px;font-size:14px;box-shadow:0 3px 5px -1px rgba(0,0,0,.2),0 6px 10px rgba(0,0,0,.14);z-index:8}
 .gm .snk{flex-wrap:wrap}.gm .snk span{flex:1 1 150px;padding:6px 8px 6px 0;line-height:1.3;overflow-wrap:anywhere}.gm .snk .ua{color:var(--sbA);font-weight:500;padding:0 10px!important;height:40px!important;display:inline-flex!important;align-items:center;border-radius:4px!important}.gm .snk .ib{color:var(--sbT);width:36px;height:36px!important}
-.gm .scr{position:absolute;inset:0;z-index:9;background:rgba(0,0,0,.32);animation:fd .25s}@keyframes fd{from{opacity:0}}
-.gm .sv{position:absolute;z-index:10;left:50%;width:min(360px,calc(100% - 16px));transform:translateX(-50%);background:var(--pop);border-radius:16px;padding:8px 0 10px;box-shadow:0 4px 8px 3px rgba(0,0,0,.15),0 1px 3px rgba(0,0,0,.3);animation:sv .3s ${SP}}@keyframes sv{from{transform:translateX(-50%) scale(.94);opacity:0}}
+.gm .scr{position:absolute;inset:0;z-index:9;background:rgba(0,0,0,.32)}
+.gm .sv{position:absolute;z-index:10;left:50%;width:min(360px,calc(100% - 16px));transform:translateX(-50%);background:var(--pop);border-radius:16px;padding:8px 0 10px;box-shadow:0 4px 8px 3px rgba(0,0,0,.15),0 1px 3px rgba(0,0,0,.3)}
 .gm .sv .sh{display:flex;align-items:center;gap:8px;padding:6px 6px 2px 20px}.gm .sv .sh b{font-size:18px;font-weight:400;flex:1;white-space:nowrap}.gm .sv .tz{font-size:12px;color:var(--t3);padding:0 20px 6px}
 .gm .sv .op{display:flex!important;align-items:center;gap:10px;width:100%;min-height:48px!important;padding:6px 20px!important;font-size:14px;color:var(--tx)}.gm .sv .op:hover{background:var(--hv)!important}.gm .sv .op .ol{flex:1;display:flex;align-items:center;gap:8px;flex-wrap:wrap}.gm .sv .op .ow{font-size:13px;color:var(--t3);white-space:nowrap;font-variant-numeric:tabular-nums;text-align:right}.gm .sv .op svg{color:var(--t2)}
 .gm .sv.pk2{width:min(580px,calc(100% - 16px))}.gm .sv .pw{display:flex;flex-wrap:wrap;gap:12px 20px;padding:4px 16px 0}.gm .sv .ca{width:308px;max-width:100%;margin:0 auto}
@@ -155,7 +250,7 @@ const I=(k,s=20)=>`<svg width="${s}" height="${s}" viewBox="0 0 24 24" aria-hidd
 const G='<svg class="lg" viewBox="0 0 48 36" aria-hidden="true"><path fill="#4285f4" d="M3 36h8V17L0 9v24c0 1.7 1.3 3 3 3z"/><path fill="#34a853" d="M37 36h8c1.7 0 3-1.3 3-3V9l-11 8z"/><path fill="#fbbc04" d="M37 3v14l11-8V5c0-3.7-4.2-5.8-7.2-3.6z"/><path fill="#ea4335" d="M11 17V3l13 9.8L37 3v14L24 26.8z"/><path fill="#c5221f" d="M0 5v4l11 8V3L7.2 1.4C4.2-.8 0 1.3 0 5z"/></svg>';
 const PAL=['#7b61ff','#0b8a7a','#e8710a','#c5221f','#1a73e8','#9334e6','#188038','#b06000'];
 const SL={'Agreed':'g','Negotiating':'o','Rate asked':'p','Inbound':'b','Paid':'g'};
-let Q=(D.drafts||[]).map((d,i)=>({...d,st:'open',val:d.choice?d.choice.def:null,txt:null,bc:d.color||PAL[i%PAL.length],exp:false,sub:false,full:false,col:false})),cur=0,dir='',menu=null,snk=null,sent=false;
+let Q=(D.drafts||[]).map((d,i)=>({...d,st:'open',val:d.choice?d.choice.def:null,txt:null,bc:d.color||PAL[i%PAL.length],exp:false,sub:false,full:false,col:false})),cur=0,menu=null,snk=null,sent=false,fst=true;
 const make=d=>d.txt!=null?d.txt:(d.choice?d.body.replace('{{choice}}',d.choice.opts[d.val][1]):d.body);
 const ob=()=>Q.filter(d=>d.st=='ok');
 /* time in the recipient's zone: wall clock <-> UTC ms */
@@ -182,31 +277,33 @@ function labels(d){return`${d.urgent?'<span class="lb r">Urgent</span>':''}${d.v
 /* their message is always shown in full (paragraphs kept); a long one scrolls inside its block (about 320px) with a fade.
  theirs.history [{name,email,date,text}] oldest first: one line each, tap to open */
 function msg(d){const t=d.theirs;if(!t)return'';const H=t.history||[];d.hx=d.hx||{};
-const one=(m,i)=>{const o=d.hx[i];return`<div class="hm${o?' on':''}"><button class="hr" data-h="${i}" aria-expanded="${!!o}"><span class="av mi" style="--bc:${d.bc}">${e((m.name||'?')[0].toUpperCase())}</span><span class="hn"><b>${e(m.name||'')}</b><span>${o?'':e(String(m.text||'').replace(/\s+/g,' '))}</span></span><span class="dt">${when(m.date)}</span></button>${o?`<div class="mb sc">${e(m.text)}</div>`:''}</div>`};
+const one=(m,i)=>{const o=d.hx[i];return`<div class="hm${o?' on':''}"><button class="hr" data-h="${i}" aria-expanded="${!!o}"><span class="av mi" style="--bc:${d.bc}">${e((m.name||'?')[0].toUpperCase())}</span><span class="hn"><b>${e(m.name||'')}</b><span>${e(String(m.text||'').replace(/\s+/g,' '))}</span></span><span class="dt">${when(m.date)}</span></button><div class="mb sc">${e(m.text)}</div></div>`};
 return`${H.length?`<div class="hs">${H.map(one).join('')}</div>`:''}<div class="ms${d.col?' col':''}"><button class="mh" data-c="1" aria-expanded="${!d.col}"><span class="av" style="--bc:${d.bc}">${e((t.name||'?')[0].toUpperCase())}</span><span class="mn"><span class="l1"><b>${e(t.name)}</b>${t.email?`<span class="em">&lt;${e(t.email)}&gt;</span>`:''}</span><span class="l2">${d.col?e(String(t.text).replace(/\s+/g,' ')):'to me'}</span></span><span class="dt">${when(t.date)}</span></button>
 <div class="mb sc">${e(t.text)}</div>${t.summary?'<div class="mb" style="font-size:12px;color:var(--t3)">Summary of their email</div>':''}</div>`}
 function compose(d){const to=d.theirs&&d.theirs.name?d.theirs.name:d.to;
 return`<div class="cm" data-id="${e(d.id)}"><div class="cr"><button class="rp" data-m="rp" aria-label="Type of response">${I('reply',20)}${I('drop',18)}</button>
 <span class="to" title="${e(d.to)}"><span class="av mi" style="--bc:${d.bc}">${e((to||'?')[0].toUpperCase())}</span><span>${e(to)}${d.theirs&&d.theirs.name?` <span style="color:var(--t3)">&lt;${e(d.to)}&gt;</span>`:''}</span></span><span class="fr">from ${e(d.from)}</span></div>
-${d.exp?`<div class="fl"><span class="k">From</span><input data-k="from" value="${e(d.from)}" aria-label="From"></div><div class="fl"><span class="k">To</span><input data-k="to" value="${e(d.to)}" aria-label="To"></div><div class="fl"><span class="k">Cc</span><input data-k="cc" value="${e(d.cc||'')}" placeholder="Add Cc" aria-label="Cc"></div>`:''}
-${d.sub?`<div class="fl"><span class="k">Subject</span><input data-k="subject" value="${e(d.subject||('Re: '+((d.theirs||{}).subject||d.brand)))}" aria-label="Subject"></div>`:''}
+<div class="fx xp${d.exp?' on':''}"><div class="fl"><span class="k">From</span><input data-k="from" value="${e(d.from)}" aria-label="From"></div><div class="fl"><span class="k">To</span><input data-k="to" value="${e(d.to)}" aria-label="To"></div><div class="fl"><span class="k">Cc</span><input data-k="cc" value="${e(d.cc||'')}" placeholder="Add Cc" aria-label="Cc"></div></div>
+<div class="fx xs${d.sub?' on':''}"><div class="fl"><span class="k">Subject</span><input data-k="subject" value="${e(d.subject||('Re: '+((d.theirs||{}).subject||d.brand)))}" aria-label="Subject"></div></div>
 ${d.choice?`<div class="ch"><span>${e(d.choice.label)}</span><select data-k="choice" aria-label="${e(d.choice.label)}">${Object.entries(d.choice.opts).map(([k,v])=>`<option value="${e(k)}"${k==d.val?' selected':''}>${e(v[0])}</option>`).join('')}</select></div>`:''}
 <textarea data-k="body" rows="3" aria-label="Message body">${e(make(d))}</textarea>
 <div class="bt"><div class="sd"><button class="s1" data-a="ok">Send</button><button class="s2" data-m="sd" aria-label="More send options">${I('drop',20)}</button></div><span class="wc"></span><span class="sp"></span><button class="ib" data-a="drop" aria-label="Discard draft" title="Discard draft">${I('del',20)}</button></div></div>`}
 function banner(d){const m={ok:d.at?['sched',`Send scheduled for ${fmt(d.at.tz,d.at.t)} ${tzn(d.at.tz,d.at.t)}. It goes to Concierge with the Outbox.`]:['outbox','In your Outbox. It goes out with the rest when you send the Outbox.'],hold:['clock','Held for later.'],drop:['del','Draft discarded.']}[d.st];return`<div class="bn">${I(m[0],20)}<span>${m[1]}</span><button class="ul" data-u="1">${d.st=='ok'?(d.at?'Cancel send':'Edit'):'Restore'}</button></div>`}
 function render(){const n=Q.length,d=Q[cur],o=ob().length,left=Q.filter(x=>x.st=='open').length;
 A.innerHTML=`<style>${css}</style><div class="gm">
-<div class="tb">${G}<span class="ttl">Concierge · Mail</span><span class="sp"></span><button class="ob${o?' on':''}" id="ob"${o?'':' disabled'} title="Send every queued reply to Concierge">${I('outbox',18)}${sent?'Sent':'Outbox'}${o?` (${o})`:''}</button><span class="cnt">${n?`${cur+1} of ${n}`:''}</span><button class="ib" data-n="-1" aria-label="Newer"${cur>0?'':' disabled'}>${I('l',22)}</button><button class="ib" data-n="1" aria-label="Older"${cur<n-1?'':' disabled'}>${I('r',22)}</button></div>
-<div class="vw ${dir}">${d?`<div class="sj"><h2>${e((d.theirs&&d.theirs.subject)||d.subject||d.brand)}</h2>${labels(d)}</div>${msg(d)}${d.st=='open'?compose(d):banner(d)}`:`<div class="dn0">${I('inbox',40)}<b>No drafts</b><span>Nothing waiting for a reply.</span></div>`}</div>
+<div class="tb">${G}<span class="ttl">Concierge · Mail</span><span class="sp"></span><button class="ob${o?' on':''}" id="ob"${o?'':' disabled'} title="Send every queued reply to Concierge">${I('outbox',18)}<span class="obn">${sent?'Sent':'Outbox'}${o?` (${o})`:''}</span></button><span class="cnt">${n?`${cur+1} of ${n}`:''}</span><button class="ib" data-n="-1" aria-label="Newer"${cur>0?'':' disabled'}>${I('l',22)}</button><button class="ib" data-n="1" aria-label="Older"${cur<n-1?'':' disabled'}>${I('r',22)}</button></div>
+<div class="vw">${d?`<div class="sj"><h2>${e((d.theirs&&d.theirs.subject)||d.subject||d.brand)}</h2>${labels(d)}</div>${msg(d)}${d.st=='open'?compose(d):banner(d)}`:`<div class="dn0">${I('inbox',40)}<b>No drafts</b><span>Nothing waiting for a reply.</span></div>`}</div>
 ${!left&&n?`<div class="bn">${I('check',20)}<span>All ${n} reviewed. ${o?`${o} in your Outbox.`:'Outbox is empty.'}</span>${o&&!sent?'<button class="ul" id="ob2">Send Outbox</button>':''}</div>`:''}
-</div>`;dir='';bind()}
+</div>`;bind()}
 function bind(){const R=A.querySelector('.gm'),d=Q[cur];
 R.querySelectorAll('[data-n]').forEach(b=>b.onclick=()=>go(cur+ +b.dataset.n));
 const obb=R.querySelector('#ob'),ob2=R.querySelector('#ob2');[obb,ob2].forEach(b=>b&&(b.onclick=sendAll));
-if(!d)return;R.querySelectorAll('.vw').forEach(b=>{const f=()=>b.classList.toggle('more',b.scrollTop+b.clientHeight<b.scrollHeight-2);f();b.onscroll=f});const c=R.querySelector('.mh');if(c)c.onclick=()=>{d.col=!d.col;render()};R.querySelectorAll('[data-h]').forEach(b=>b.onclick=()=>{const k=b.dataset.h;d.hx[k]=!d.hx[k];render()});
-const u=R.querySelector('[data-u]');if(u)u.onclick=()=>{d.st='open';d.at=null;render()};
+if(!d)return;R.querySelectorAll('.vw').forEach(b=>{const f=()=>b.classList.toggle('more',b.scrollTop+b.clientHeight<b.scrollHeight-2);f();b.onscroll=f});const more=()=>{const v=A.querySelector('.vw');if(v&&v.onscroll)v.onscroll()};
+const c=R.querySelector('.mh');if(c)c.onclick=()=>{d.col=!d.col;const ms=c.parentElement,l2=c.querySelector('.l2');c.setAttribute('aria-expanded',String(!d.col));MX.disclose(ms,!d.col,v=>{ms.classList.toggle('col',!v);l2.textContent=v?'to me':String(d.theirs.text).replace(/\s+/g,' ');more()},{body:'.mb.sc'})};
+R.querySelectorAll('[data-h]').forEach(b=>b.onclick=()=>{const k=b.dataset.h,hm=b.parentElement,o=!d.hx[k];d.hx[k]=o;b.setAttribute('aria-expanded',String(o));MX.disclose(hm,o,v=>{hm.classList.toggle('on',v);more()},{body:'.mb'})});
+const u=R.querySelector('[data-u]');if(u)u.onclick=()=>{d.st='open';d.at=null;nav(cur,0)};
 const cm=R.querySelector('.cm');if(!cm)return;const t=cm.querySelector('textarea');
-cm.querySelectorAll('[data-k]').forEach(el=>el.oninput=el.onchange=()=>{const k=el.dataset.k;if(k=='choice'){d.val=el.value;d.txt=null;t.value=make(d);fit(t,d)}else if(k=='body'){d.txt=el.value;fit(t,d)}else d[k]=el.value});fit(t,d);
+cm.querySelectorAll('[data-k]').forEach(el=>el.oninput=el.onchange=ev=>{const k=el.dataset.k;if(k=='choice'){d.val=el.value;d.txt=null;t.value=make(d);fit(t,d);if(ev&&ev.type=='change'){MX.pop(el,.94,'snappy');MX.fade(t,.4,1,180)}}else if(k=='body'){d.txt=el.value;fit(t,d)}else d[k]=el.value});fit(t,d);
 cm.querySelectorAll('[data-a]').forEach(b=>b.onclick=()=>act(b.dataset.a,d));
 cm.querySelectorAll('[data-m]').forEach(b=>b.onclick=ev=>{ev.stopPropagation();openMenu(b.dataset.m,b,d)})}
 /* the reply grows to its full height; refit when the card width changes (the box re-wraps) */
@@ -214,27 +311,33 @@ let fw=0;window.addEventListener('resize',()=>{const t=A.querySelector('.cm text
 function fit(t,d){fw=t.clientWidth;t.style.height='auto';t.style.height=t.scrollHeight+'px';const w=A.querySelector('.wc');if(!w)return;const n=t.value.trim()?t.value.trim().split(/\s+/).length:0,lim=d.limit||120;w.textContent=n+' words'+(n>lim?' · over '+lim:'');w.className='wc'+(n>lim?' bad':'')}
 function openMenu(kind,btn,d){closeMenu();const R=A.querySelector('.gm'),m=document.createElement('div');m.className='mu'+(kind=='rp'?' dn':'');
 const items=kind=='sd'?[['sched','Schedule send','sch']]:[['reply','Reply','reply'],['edit','Edit subject','sub'],['people','Edit recipients','exp']];
-m.innerHTML=items.map(([i,l,k])=>`<button data-i="${k}">${I(i,20)}${e(l)}</button>`).join('');R.appendChild(m);
+m.innerHTML=items.map(([i,l,k])=>`<button data-i="${k}">${I(i,20)}${e(l)}</button>`).join('');R.appendChild(m);rise(m,'scale(.92)','none','snappy');
 const rb=btn.getBoundingClientRect(),rr=R.getBoundingClientRect();m.style.left=Math.max(8,Math.min(rb.left-rr.left,rr.width-m.offsetWidth-8))+'px';
 if(kind=='sd')m.style.bottom=(rr.bottom-rb.top+6)+'px';else m.style.top=(rb.bottom-rr.top+4)+'px';
 m.querySelectorAll('[data-i]').forEach(b=>b.onclick=ev=>{ev.stopPropagation();const k=b.dataset.i;closeMenu();keep(d);
-if(k=='sch')schedDlg(d,btn);else if(k=='sub'){d.sub=!d.sub;render()}else if(k=='exp'){d.exp=!d.exp;render()}});
+if(k=='sch')schedDlg(d,btn);else{d[k]=!d[k];const x=A.querySelector('.cm .fx.'+(k=='sub'?'xs':'xp'));if(x)MX.disclose(x,d[k],v=>x.classList.toggle('on',v))}});
 menu=m;setTimeout(()=>document.addEventListener('click',closeMenu,{once:true}),0)}
-function closeMenu(){if(menu){menu.remove();menu=null}}
+function closeMenu(){if(menu){leave(menu);menu=null}}
 function keep(d){const t=A.querySelector('.cm textarea');if(t&&d.st=='open')d.txt=t.value}
-function go(i,auto){if(i<0||i>=Q.length)return;dir=i>cur?'in-r':i<cur?'in-l':'';cur=i;closeMenu();closeDlg();render()}
-function act(a,d,at){keep(d);closeMenu();closeDlg();const cm=A.querySelector('.cm');if(cm)cm.classList.add({ok:'out',hold:'hd',drop:'dr'}[a]);const prev=d.st,pat=d.at,idx=Q.indexOf(d);
-setTimeout(()=>{d.st=a;d.at=a=='ok'&&at?at:null;sent=false;const nx=Q.findIndex((x,i)=>i>idx&&x.st=='open'),nb=Q.findIndex(x=>x.st=='open');const to=nx>=0?nx:nb;if(to>=0){dir='in-r';cur=to}render();if(a=='ok'){const b=A.querySelector('#ob');if(b)b.classList.add('bump')}
-snack(a=='ok'&&at?`Send scheduled for ${fmt(at.tz,at.t)}`:{ok:'Reply queued',hold:'Held for later',drop:'Draft discarded'}[a],()=>{d.st=prev;d.at=pat;dir=idx<cur?'in-l':'';cur=idx;render()},a=='ok'&&at?()=>go(idx):null)},a=='ok'?380:320)}
+function go(i,auto){if(i<0||i>=Q.length)return;closeMenu();closeDlg();nav(i,Math.sign(i-cur))}
+/* nav(to, dir): show draft `to` (-1 or the current one = same thread, only the reply area changes). Another thread slides in from dir;
+ the same thread crossfades just the compose box / banner so the thread above does not flicker. */
+function nav(to,dd){const same=to<0||to==cur;return MX.swap(()=>A.querySelector(same?'.vw .cm,.vw>.bn':'.vw'),same?0:dd,()=>{if(to>=0)cur=to;render()})}
+/* the leaving compose box keeps its old meaning: Send lifts it away, Hold slides it aside, Discard drops it */
+function fly(a){if(MX.R())return;const g=A.querySelector('.gm>[inert]'),c=g&&(g.matches('.cm')?g:g.querySelector('.cm'));if(!c)return;const k=MX.curve('smooth');
+c.animate([{transform:'none'},{transform:{ok:'translateY(-18px) scale(.97)',hold:'translateX(-24px)',drop:'translateY(16px) scale(.96)'}[a]}],{duration:k.d,easing:k.e,fill:'forwards',composite:c===g?'add':'replace'})}
+function act(a,d,at){keep(d);closeMenu();closeDlg();const prev=d.st,pat=d.at,idx=Q.indexOf(d);
+d.st=a;d.at=a=='ok'&&at?at:null;sent=false;const nx=Q.findIndex((x,i)=>i>idx&&x.st=='open'),nb=Q.findIndex(x=>x.st=='open');const to=nx>=0?nx:nb;nav(to,1);fly(a);if(a=='ok'){const b=A.querySelector('#ob');if(b)MX.pop(b,.86,'bouncy')}
+snack(a=='ok'&&at?`Send scheduled for ${fmt(at.tz,at.t)}`:{ok:'Reply queued',hold:'Held for later',drop:'Draft discarded'}[a],()=>{d.st=prev;d.at=pat;nav(idx,idx<cur?-1:1)},a=='ok'&&at?()=>go(idx):null)}
 const sched=(d,t)=>act('ok',d,{t,tz:ZN(d)});let dlg=null;
-function closeDlg(){if(dlg){const g=A.querySelector('.gm');if(g)g.style.minHeight='';dlg.forEach(x=>x.remove());dlg=null;document.removeEventListener('keydown',escDlg)}}
+function closeDlg(){if(dlg){const[sc,v]=dlg;dlg=null;leave(sc,1);leave(v,0,()=>{const g=A.querySelector('.gm');if(g&&!dlg)g.style.minHeight=''});document.removeEventListener('keydown',escDlg)}}
 function escDlg(ev){if(ev.key=='Escape')closeDlg()}
 function schedDlg(d,btn){closeMenu();closeDlg();keep(d);const R=A.querySelector('.gm'),tz=ZN(d),L=presets(d),pl=planned(d),now=Date.now(),sc=document.createElement('div'),v=document.createElement('div');
 sc.className='scr';v.className='sv';v.setAttribute('role','dialog');v.setAttribute('aria-modal','true');v.setAttribute('aria-label','Schedule send');R.appendChild(sc);R.appendChild(v);dlg=[sc,v];
 const rb=btn.getBoundingClientRect(),place=()=>{R.style.minHeight=(v.offsetHeight+16)+'px';const rr=R.getBoundingClientRect();v.style.top=Math.max(8,Math.min(rb.top-rr.top-v.offsetHeight-6,rr.height-v.offsetHeight-8))+'px'};
 const row=(lab,t)=>`<button class="op" data-t="${t}"><span class="ol">${e(lab)}</span><span class="ow">${e(fmt(tz,t,0))}</span></button>`;
 const list=()=>{v.className='sv';v.innerHTML=`<div class="sh"><b>Schedule send</b></div><div class="tz">(${e(tzl(tz,now))})</div>${pl?row('Last scheduled time',pl)+'<div class="sep"></div>':''}${L.map(x=>row(x.lab,x.t)).join('')}<div class="sep"></div><button class="op" data-pk="1">${I('cal',20)}<span class="ol">Pick date &amp; time</span></button>`;
-v.querySelectorAll('[data-t]').forEach(b=>b.onclick=()=>sched(d,+b.dataset.t));v.querySelector('[data-pk]').onclick=pick;place()};
+v.querySelectorAll('[data-t]').forEach(b=>b.onclick=()=>sched(d,+b.dataset.t));v.querySelector('[data-pk]').onclick=()=>{pick();kids(v)};place()};
 /* Gmail's "Pick date & time": month calendar on the left, Date and Time fields on the right, Cancel / Schedule send */
 const W0=wall(tz,pl||L[0].t);let sel={y:W0.year,m:W0.month,d:W0.day},hh=W0.hour%24,mm=W0.minute,vm={y:sel.y,m:sel.m};
 const MN=['January','February','March','April','May','June','July','August','September','October','November','December'],td=wall(tz,now),tdk=Date.UTC(td.year,td.month-1,td.day);
@@ -243,16 +346,34 @@ function pick(){v.className='sv pk2';v.setAttribute('aria-label','Pick date and 
 <div class="fs"><label class="of"><span>Date</span><input data-fd value="${e(dstr())}" aria-label="Date"></label><label class="of"><span>Time</span><input data-ft value="${e(tstr())}" aria-label="Time, ${e(tzn(tz,now))}"></label><span class="er" role="alert"></span></div></div>
 <div class="pb"><button data-c="1">Cancel</button><button class="pr" data-s="1">Schedule send</button></div>`;
 const fd=v.querySelector('[data-fd]'),ft=v.querySelector('[data-ft]'),er=v.querySelector('.er');
-v.querySelectorAll('[data-mv]').forEach(b=>b.onclick=()=>{const k=vm.m-1+ +b.dataset.mv;vm={y:vm.y+Math.floor(k/12),m:((k%12)+12)%12+1};pick()});
-v.querySelectorAll('[data-dy]').forEach(b=>b.onclick=()=>{sel={y:vm.y,m:vm.m,d:+b.dataset.dy};pick()});
+v.querySelectorAll('[data-mv]').forEach(b=>b.onclick=()=>{const k=vm.m-1+ +b.dataset.mv;vm={y:vm.y+Math.floor(k/12),m:((k%12)+12)%12+1};pick();slide(v.querySelector('.cg'),+b.dataset.mv)});
+v.querySelectorAll('[data-dy]').forEach(b=>b.onclick=()=>{sel={y:vm.y,m:vm.m,d:+b.dataset.dy};pick();MX.pop(v.querySelector('.dy.on'),.86,'bouncy')});
 fd.onchange=()=>{const t=Date.parse(fd.value.replace(/(\d)(st|nd|rd|th)\b/,'$1'));if(isNaN(t)){er.textContent='Enter a date like Nov 8, 2026';return}const x=new Date(t);sel={y:x.getFullYear(),m:x.getMonth()+1,d:x.getDate()};vm={y:sel.y,m:sel.m};pick()};
 ft.onchange=()=>{const m=ft.value.trim().match(/^(\d{1,2})(?::(\d{2}))?\s*([ap])?\.?m?\.?$/i);if(!m||+m[1]>23||+(m[2]||0)>59){er.textContent='Enter a time like 8:00 AM';return}let h=+m[1];if(m[3])h=h%12+(m[3].toLowerCase()=='p'?12:0);hh=h;mm=+(m[2]||0);ft.value=tstr();er.textContent=''};
-v.querySelector('[data-c]').onclick=list;v.querySelector('[data-s]').onclick=()=>{ft.onchange();if(er.textContent)return;const t=zoned(tz,sel.y,sel.m,sel.d,hh,mm);if(!(t>Date.now())){er.textContent='Pick a time in the future';return}sched(d,t)};place()}
-sc.onclick=closeDlg;v.onclick=ev=>ev.stopPropagation();document.addEventListener('keydown',escDlg);list()}
-function snack(txt,undo,view){if(snk){clearTimeout(snk.t);snk.el.remove();snk=null}const R=A.querySelector('.gm'),s=document.createElement('div');s.className='snk';s.setAttribute('role','status');s.innerHTML=`<span>${e(txt)}</span>${undo?'<button class="ua">Undo</button>':''}${view?'<button class="ua vm">View message</button>':''}<button class="ib" aria-label="Dismiss">${I('x',18)}</button>`;R.appendChild(s);R.classList.add('hs');
-const bye=()=>{s.classList.add('bye');const g=A.querySelector('.gm');if(g)g.classList.remove('hs');setTimeout(()=>s.remove(),300);snk=null};const vm=s.querySelector('.vm');if(vm)vm.onclick=()=>{bye();view()};const ua=s.querySelector('.ua:not(.vm)');if(ua)ua.onclick=()=>{clearTimeout(snk&&snk.t);s.remove();snk=null;A.querySelector('.gm').classList.remove('hs');undo()};s.querySelector('.ib').onclick=bye;snk={el:s,t:setTimeout(bye,6000)}}
+v.querySelector('[data-c]').onclick=()=>{list();kids(v)};v.querySelector('[data-s]').onclick=()=>{ft.onchange();if(er.textContent)return;const t=zoned(tz,sel.y,sel.m,sel.d,hh,mm);if(!(t>Date.now())){er.textContent='Pick a time in the future';return}sched(d,t)};place()}
+sc.onclick=closeDlg;v.onclick=ev=>ev.stopPropagation();document.addEventListener('keydown',escDlg);list();MX.fade(sc,0,1,200);rise(v,'translateX(-50%) scale(.94)','translateX(-50%)','smooth')}
+function snack(txt,undo,view){if(snk){clearTimeout(snk.t);leave(snk.el);snk=null}const R=A.querySelector('.gm'),s=document.createElement('div');s.className='snk';s.setAttribute('role','status');s.innerHTML=`<span>${e(txt)}</span>${undo?'<button class="ua">Undo</button>':''}${view?'<button class="ua vm">View message</button>':''}<button class="ib" aria-label="Dismiss">${I('x',18)}</button>`;R.appendChild(s);room(true);MX.toast(s);
+const bye=()=>{if(snk&&snk.el===s)snk=null;leave(s);if(!snk)room(false)};const vm=s.querySelector('.vm');if(vm)vm.onclick=()=>{bye();view()};const ua=s.querySelector('.ua:not(.vm)');if(ua)ua.onclick=()=>{clearTimeout(snk&&snk.t);bye();undo()};s.querySelector('.ib').onclick=bye;snk={el:s,t:setTimeout(bye,6000)}}
+/* motion helpers. leave(el): fade a popup, dialog or snackbar out (the scrim only fades) and keep it on screen across re-renders until gone */
+const LV=new Set();function leave(el,fadeOnly,done){if(!el||el._mxo)return;LV.add(el);const fin=()=>{LV.delete(el);done&&done()};
+if(fadeOnly){el._mxo=1;el.style.pointerEvents='none';el.animate([{opacity:getComputedStyle(el).opacity},{opacity:0}],{duration:160,easing:'ease-out',fill:'forwards'}).finished.then(()=>{el.remove();fin()}).catch(()=>{el.remove();fin()})}else MX.out(el,fin)}
+/* rise(el, from, to, preset): a popup or dialog springs open from its anchor (crossfade only under reduced motion) */
+function rise(el,from,to,n){el.style.animation='none';if(MX.R())return void MX.fade(el,0,1);const c=MX.curve(n);el.animate([{transform:from,opacity:0},{transform:to,opacity:1}],{duration:c.d,easing:c.e})}
+function slide(el,dd){if(!el)return;if(MX.R())return void MX.fade(el,0,1);const c=MX.curve('smooth');el.animate([{transform:`translateX(${dd*16}px)`,opacity:0},{transform:'none',opacity:1}],{duration:c.d,easing:c.e})}
+function kids(v){[...v.children].forEach(x=>MX.fade(x,0,1,180))}
+/* room(on): the card grows a snackbar slot at the bottom (padding, set once) and reveals or hides it with clip-path, interruptibly */
+function room(on,from){const g=A.querySelector('.gm');if(!g)return;const cur=from||(g._rm?getComputedStyle(g).clipPath:null);if(g._rm){g._rm.cancel();g._rm=null}const has=g.classList.contains('hs');
+if(MX.R()||!g.isConnected){g.classList.toggle('hs',on);return}if(on==has&&!cur)return;
+g.classList.add('hs');const H1=g.offsetHeight;g.classList.remove('hs');const H0=g.offsetHeight;g.classList.add('hs');const dh=Math.max(0,H1-H0),rr=parseFloat(getComputedStyle(g).borderBottomLeftRadius)||0,cl=p=>`inset(0px 0px ${p}px 0px round ${rr}px)`,c=MX.curve('smooth');
+const a=g.animate([{clipPath:cur&&cur!='none'?cur:cl(on?dh:0)},{clipPath:cl(on?0:dh)}],{duration:c.d,easing:c.e,fill:'both'});g._rm=a;
+a.finished.then(()=>{if(g._rm!==a)return;g._rm=null;if(!on)g.classList.remove('hs');a.cancel()}).catch(()=>{})}
+const roll=(el,old)=>{if(!el||old==null)return;const t=el.textContent;if(t===old)return;el.textContent=old;MX.text(el,t)};
 /* render() replaces the frame, so re-attach a live snackbar after each render */
-const _r=render;render=function(){const s=snk&&snk.el;_r();if(s){const g=A.querySelector('.gm');g.classList.add('hs');g.appendChild(s)}};
+const _r=render;render=function(){const o=A.querySelector('.gm'),s=snk&&snk.el,had=!!o&&o.classList.contains('hs'),cl=o&&o._rm?getComputedStyle(o).clipPath:null,
+pc=o&&o.querySelector('.cnt'),pn=o&&o.querySelector('.obn'),pct=pc?pc.textContent:null,pnt=pn?pn.textContent:null,hb=!!(o&&o.querySelector(':scope>.bn'));_r();const g=A.querySelector('.gm');
+LV.forEach(x=>g.appendChild(x));if(s){g.classList.add('hs');g.appendChild(s)}else if(had){g.classList.add('hs');room(false,cl)}
+roll(g.querySelector('.cnt'),pct);roll(g.querySelector('.obn'),pnt);const bn=g.querySelector(':scope>.bn');if(bn&&o&&!hb)MX.enter(bn,{y:8});
+if(fst){fst=false;MX.enter(g,{y:12});MX.enter(g.querySelectorAll('.gm>.tb,.vw>*'),{y:8,step:24})}};
 function sendAll(){const ap=ob();if(!ap.length)return;sent=true;sendPrompt('Approved to send ('+ap.length+'): '+ap.map(d=>`[${d.brand}] From: ${d.from} To: ${d.to}${d.cc?' Cc: '+d.cc:''} Subject: ${d.sub&&d.subject?d.subject:'reply in existing thread'}${d.at?`\nSchedule: ${iso(d.at.tz,d.at.t)} (${d.at.tz})`:''}\n${make(d)}`).join('\n\n---\n\n'));render();snack('Outbox sent to Concierge',null)}
 render();/* Ask Concierge bar (standard in every Concierge widget): one-line pill at the bottom of the card. The arrow shows once there is text;
  Enter or the arrow calls sendPrompt("[<what is on screen>] <text>"), clears the field and shows "Sent to chat" for a moment. */

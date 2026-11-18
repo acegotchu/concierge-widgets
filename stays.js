@@ -79,42 +79,135 @@ skin('.sw',`
 & .sub{display:flex;align-items:center;gap:6px}
 @media (max-width:420px){& .sub{display:flex;font-size:11px}}`);stampSync('.top','after');
 /*SKIN:END*/
+/*MOTION:BEGIN*/
+/* Motion layer (shared; synced into every template by _motion/sync.py, edit it there). Springs, not curves: every animation is a
+ damped spring described like SwiftUI (response = seconds per oscillation, damping fraction), sampled into a CSS linear() easing
+ for CSS and WAAPI, so it runs on the compositor (transform, opacity, clip-path only). Three presets:
+   snappy (.25s, .86): direct feedback. Press, toggle, option select, segmented thumb. Settles in 250ms.
+   smooth (.30s, 1.0): layout. Expand and collapse, FLIP moves, tab content, number rolls, card and row entry. 95% in 230ms, settled 360ms.
+   bouncy (.32s, .68): confirmation. Tick pop, toast in. 95% there in 145ms, a 5% overshoot settles by 355ms.
+ Every move is interruptible: a new target starts from where the element is now, and expand/collapse also keeps its velocity.
+ prefers-reduced-motion: no travel, no scale, no overshoot; changes crossfade in 150ms. CSS gets the curves as custom properties on
+ #app: var(--mx-snappy), var(--mx-smooth), var(--mx-bouncy) are "<duration> <easing>" pairs, e.g. transition:transform var(--mx-smooth). */
+const MX=(()=>{const RM=matchMedia('(prefers-reduced-motion: reduce)'),R=()=>RM.matches,now=()=>performance.now(),
+LIN=(()=>{try{return CSS.supports('transition-timing-function','linear(0, 1)')}catch(e){return false}})(),
+SPR={snappy:[.25,.86,'cubic-bezier(.25,.9,.3,1)'],smooth:[.3,1,'cubic-bezier(.2,.85,.25,1)'],bouncy:[.32,.68,'cubic-bezier(.3,1.35,.5,1)']},CV={};
+/* x(t): displacement of a unit spring released at 1 with velocity v0 (units/s), heading to 0 */
+function sx(resp,z,v0){const w=2*Math.PI/resp;if(z<1){const wd=w*Math.sqrt(1-z*z),B=(v0+z*w)/wd;return t=>Math.exp(-z*w*t)*(Math.cos(wd*t)+B*Math.sin(wd*t))}const B=v0+w;return t=>(1+B*t)*Math.exp(-w*t)}
+/* curve(name,v) -> {e: easing, d: ms, u(t): progress 0..1 at t seconds, du(t): progress per second}; v is the starting progress velocity */
+function curve(n,v=0){v=Math.max(-40,Math.min(40,Math.round(v*4)/4));const k=n+v;if(CV[k])return CV[k];const[r,z,fb]=SPR[n]||SPR.smooth,x=sx(r,z,-v);
+let T=0;for(let t=0;t<1.2;t+=1/240)if(Math.abs(x(t))>.005)T=t;T=Math.max(.12,T+1/240);
+const N=Math.max(12,Math.ceil(T*90)),pts=[];for(let i=0;i<=N;i++){const t=T*i/N;pts.push(i==N?1:+(1-x(t)).toFixed(4))}
+const u=t=>t>=T?1:1-x(t),du=t=>t>=T?0:(x(Math.max(0,t-.002))-x(t+.002))/.004;return CV[k]={e:LIN?`linear(${pts.join(',')})`:fb,d:Math.round(T*1000),u,du}}
+const card=()=>A.querySelector(':scope>:not(style):not(script):not(link)'),ease=n=>{const c=curve(n);return c.d+'ms '+c.e};
+/* one global sheet: rolling-digit ghosts and the reduced-motion crossfade; lives in the document (or shadow root), so it survives re-renders */
+(()=>{const r=A.getRootNode&&A.getRootNode(),h=r&&r.host?r:A.ownerDocument.head;if(!h||h.querySelector('style[data-mx]'))return;const s=A.ownerDocument.createElement('style');s.setAttribute('data-mx','');
+s.textContent='.mx-d{display:inline-block;position:relative;white-space:pre}.mx-g{position:absolute;left:0;top:0;pointer-events:none}.mx-g::before{content:attr(data-c)}';h.appendChild(s)})();
+const vars=()=>{for(const n in SPR)A.style.setProperty('--mx-'+n,R()?'1ms linear':ease(n))};vars();try{RM.addEventListener('change',vars)}catch(e){}
+const anim=(el,kf,n,o={})=>{const c=typeof n=='object'?n:curve(n);return el.animate(kf,{duration:c.d,easing:c.e,fill:'both',...o})};
+const fade=(el,a,b,ms=150)=>el&&el.animate([{opacity:a},{opacity:b}],{duration:ms,easing:'ease-out'});
+
+/* disclose(row, open, set, {body, root}): expand or collapse one row with matched geometry. set(bool) is the template's own class
+ toggle. The layout changes once; what follows the row (rows below, footer, the card's bottom edge) is FLIPped with additive
+ translateY, the row reveals or hides its new height with clip-path, so no frame does layout. A collapse keeps the open layout
+ until the spring lands, then commits. A second call mid-flight reverses from the current position and velocity. */
+const ST=new WeakMap();
+function after(el,root){const out=[];while(el&&el!==root&&el.parentElement){let s=el.nextElementSibling;while(s){const p=getComputedStyle(s).position;if(p!='absolute'&&p!='fixed')out.push(s);s=s.nextElementSibling}el=el.parentElement}return out}
+function scrollers(el,root){const out=[];while(el&&el!==root){el=el.parentElement;if(el&&el.scrollHeight>el.clientHeight+1)out.push([el,el.scrollTop])}return out}
+function disclose(row,open,set,o={}){const st=ST.get(row);if(st&&st.to==open)return;const root=o.root||card(),body=o.body?row.querySelector(o.body):null;
+if(body)body.style.transition='none';
+if(R()||!row.isConnected||!root){if(st)st.stop();set(open);if(open&&R())fade(body,0,1);return}
+let p0=open?0:1,v=0;if(st){p0=st.p();v=st.v();st.stop()}
+const F=after(row,root),E=[row,root,...F],sc=scrollers(row,root),rect=()=>E.map(e=>e.getBoundingClientRect()),keep=()=>sc.forEach(([e,t])=>e.scrollTop=t);
+const oa=sc.map(([e])=>{const v=e.style.overflowAnchor;e.style.overflowAnchor='none';return v});let a,b;if(st||!open){b=rect();set(false);a=rect();set(true);keep()}else{a=rect();set(true);b=rect();keep()}
+sc.forEach(([e],i)=>e.style.overflowAnchor=oa[i]);const dh=b[0].height-a[0].height,dr=b[1].height-a[1].height,dy=F.map((e,i)=>b[i+2].top-a[i+2].top);
+if(Math.abs(dh)<.5){if(!open)set(false);return}
+const to=open?1:0,c=curve('smooth',(to-p0)?v/(to-p0):0),rr=e=>parseFloat(getComputedStyle(e).borderBottomLeftRadius)||0,R0=rr(row),R1=rr(root),
+clip=(d,p,r,t)=>`inset(${t}px 0 ${Math.max(0,d*(1-p)).toFixed(1)}px 0 round ${r}px)`,ty=(d,p)=>`translateY(${(-d*(1-p)).toFixed(1)}px)`,
+an=[anim(row,[{clipPath:clip(dh,p0,R0,-24)},{clipPath:clip(dh,to,R0,-24)}],c)];
+if(Math.abs(dr)>.5)an.push(anim(root,[{clipPath:clip(dr,p0,R1,0)},{clipPath:clip(dr,to,R1,0)}],c));
+F.forEach((e,i)=>{if(Math.abs(dy[i])>.5)an.push(anim(e,[{transform:ty(dy[i],p0)},{transform:ty(dy[i],to)}],c,{composite:'add'}))});
+if(body)an.push(anim(body,[{opacity:p0,transform:`translateY(${(-6*(1-p0)).toFixed(1)}px)`},{opacity:to,transform:`translateY(${-6*(1-to)}px)`}],c,{composite:'replace'}));
+const el=()=>(an[0].currentTime||0)/1000,s={to:open,p:()=>p0+(to-p0)*c.u(el()),v:()=>(to-p0)*c.du(el()),stop(){an.forEach(x=>x.cancel());ST.delete(row)}};ST.set(row,s);
+an[0].finished.then(()=>{if(ST.get(row)!==s)return;if(!open)set(false);s.stop()}).catch(()=>{})}
+
+/* flip(sel, mutate, n): anything matching sel moves from where it was to where mutate() puts it (re-render safe: matched by
+ data-mx key, else by selector order). Width changes scale on X from the left (segmented thumbs, rails). Returns the new elements. */
+function flip(sel,mutate,n='smooth'){const key=(e,i)=>e.dataset.mx||(sel+'#'+i),q=()=>[...A.querySelectorAll(sel)],m=new Map();q().forEach((e,i)=>m.set(key(e,i),e.getBoundingClientRect()));mutate();const els=q();if(R())return els;
+els.forEach((e,i)=>{const f=m.get(key(e,i));if(!f)return;const l=e.getBoundingClientRect(),dx=f.left-l.left,dy=f.top-l.top,sx=l.width?f.width/l.width:1;
+if(Math.abs(dx)<.5&&Math.abs(dy)<.5&&Math.abs(sx-1)<.01)return;anim(e,[{transformOrigin:'0 0',transform:`translate(${dx}px,${dy}px) scaleX(${sx})`},{transformOrigin:'0 0',transform:'none'}],n,{composite:'add',fill:'none'})});return els}
+
+/* swap(get, dir, mutate): tab and page switches. The old content leaves as a ghost (slide -dir and fade), the new content slides in
+ from dir and fades up, both on the smooth spring. The ghost is marked data-mx-ghost, aria-hidden and inert. dir 0 = crossfade only (also what reduced motion gets). Interruptible: a second
+ switch ghosts the content where it is, mid-flight. */
+let G=null;function swap(get,dir,mutate){const old=get(),root=card();if(G){G.remove();G=null}let g=null;
+if(old&&root&&old.isConnected){const r=old.getBoundingClientRect(),o=root.getBoundingClientRect(),cs=getComputedStyle(old);g=old.cloneNode(true);g.removeAttribute('id');g.querySelectorAll('[id]').forEach(x=>x.removeAttribute('id'));
+g.setAttribute('aria-hidden','true');g.setAttribute('data-mx-ghost','');g.inert=true;Object.assign(g.style,{position:'absolute',left:r.left-o.left-root.clientLeft+'px',top:r.top-o.top-root.clientTop+'px',width:r.width+'px',height:r.height+'px',margin:'0',pointerEvents:'none',zIndex:'0',transform:cs.transform=='none'?'':cs.transform,opacity:cs.opacity,animation:'none',boxSizing:'border-box'});
+g.querySelectorAll('*').forEach(x=>x.style.animation='none');g._st=old.scrollTop;g._sl=old.scrollLeft}
+mutate();const nw=get(),d=R()?0:dir,host=card();if(g&&host){host.insertBefore(g,host.firstChild);g.scrollTop=g._st;g.scrollLeft=g._sl}
+if(g){G=g;const c=curve('smooth');g.animate([{opacity:+g.style.opacity||1,transform:g.style.transform||'none'},{opacity:0,transform:`translateX(${-d*28}px)`}],{duration:R()?150:Math.round(c.d*.6),easing:R()?'ease-out':c.e,fill:'both'}).finished.then(()=>{g.remove();if(G===g)G=null}).catch(()=>{})}
+if(nw){if(R())fade(nw,0,1);else anim(nw,[{opacity:0,transform:`translateX(${d*28}px)`},{opacity:1,transform:'none'}],'smooth',{fill:'none'})}return nw}
+
+/* text(el, s): set text; numbers inside roll digit by digit (up when they grow, down when they shrink), like iOS numeric text.
+ Words around them stay put. A different shape crossfades. textContent is right as soon as this returns (ghost digits are CSS only). */
+function text(el,s){if(!el)return;s=String(s);const o=el.getAttribute('data-mxt')??el.textContent;if(o===s&&el.textContent===s)return;el.setAttribute('data-mxt',s);
+if(R()||!el.isConnected||o===s){el.textContent=s;if(R()&&o!==s)fade(el,.35,1);return}const sp=x=>x.split(/(\d[\d.,]*)/),P=sp(o),Q=sp(s),nm=x=>parseFloat(x.replace(/,/g,''))||0;
+if(P.length!=Q.length||P.some((t,i)=>i%2==0&&t!==Q[i])){el.textContent='';const w=document.createElement('span');w.className='mx-d';w.textContent=s;el.append(w);anim(w,[{opacity:0,transform:'translateY(.2em)'},{opacity:1,transform:'none'}],'smooth',{fill:'none'});return}
+el.textContent='';const c=curve('smooth');Q.forEach((t,i)=>{if(i%2==0||t===P[i]){if(t)el.append(t);return}const up=nm(t)>=nm(P[i])?1:-1,ot=P[i].padStart(t.length,' ');
+[...t].forEach((ch,j)=>{const was=ot[ot.length-t.length+j]??'';if(ch===was){el.append(ch);return}const w=document.createElement('span');w.className='mx-d';w.textContent=ch;el.append(w);
+w.animate([{transform:`translateY(${.55*up}em)`,opacity:0},{transform:'none',opacity:1}],{duration:c.d,easing:c.e,delay:j*18});
+if(was.trim()){const gh=document.createElement('span');gh.className='mx-g';gh.setAttribute('data-c',was);gh.setAttribute('aria-hidden','true');w.append(gh);
+gh.animate([{transform:'none',opacity:1},{transform:`translateY(${-.55*up}em)`,opacity:0}],{duration:Math.round(c.d*.7),easing:c.e,delay:j*18,fill:'both'}).finished.then(()=>gh.remove()).catch(()=>{})}})})}
+
+/* pop(el, from): a tick or a selection lands with a small spring scale; a second tap restarts from the current scale. */
+const PO=new WeakMap();function pop(el,s=.82,n='bouncy'){if(!el||R())return;const pv=PO.get(el);let f=s;if(pv){const k=pv.c.u((pv.a.currentTime||0)/1000);f=Math.min(s,pv.s+(1-pv.s)*k);pv.a.cancel()}
+const c=curve(n),a=el.animate([{transform:`scale(${f})`},{transform:'scale(1)'}],{duration:c.d,easing:c.e,composite:'add'});PO.set(el,{a,c,s:f});a.finished.then(()=>PO.get(el)&&PO.get(el).a===a&&PO.delete(el)).catch(()=>{})}
+
+/* toast(el) springs a toast or snackbar in; out(el) lets it go (fade and drop, 160ms) and removes it. */
+function toast(el,y=18){if(!el)return;el.style.animation='none';if(R())return void fade(el,0,1);anim(el,[{opacity:0,transform:`translateY(${y}px) scale(.96)`},{opacity:1,transform:'none'}],'bouncy',{fill:'none'})}
+function out(el,done){if(!el)return;if(el._mxo)return;el._mxo=1;el.style.pointerEvents='none';const a=el.animate([{opacity:getComputedStyle(el).opacity},{opacity:0}],{duration:160,easing:'cubic-bezier(.4,0,1,1)',fill:'forwards'});if(!R())el.animate([{transform:'none'},{transform:'translateY(8px) scale(.98)'}],{duration:160,easing:'cubic-bezier(.4,0,1,1)',fill:'forwards',composite:'add'});
+a.finished.then(()=>{el.remove();done&&done()}).catch(()=>{el.remove();done&&done()})}
+
+/* enter(els, {y, step, max}): card and row entry, a short rise and fade, staggered (step ms per row, capped at max rows). */
+function enter(els,o={}){if(!els)return;els=els.length!=null?[...els]:[els];const y=o.y??10,st=o.step??28,mx=o.max??8;els.forEach((e,i)=>{if(R())return void fade(e,0,1,180);
+const dl=Math.min(i,mx)*st;anim(e,[{transform:`translateY(${y}px)`},{transform:'none'}],'smooth',{delay:dl,fill:'backwards',composite:'add'});e.animate([{opacity:0},{opacity:1}],{duration:220,delay:dl,easing:'cubic-bezier(.2,0,0,1)',fill:'backwards'})})}
+
+return{R,curve,ease,disclose,flip,swap,text,pop,toast,out,enter,fade}})();
+/*MOTION:END*/
+
 const SP='cubic-bezier(.32,.72,0,1)';
 const css=`.sw{--l:#0b0b0c;--l2:rgba(30,30,38,.74);--gl:rgba(255,255,255,.66);--hi:rgba(255,255,255,.9);--rim:rgba(255,255,255,.85);--ed:rgba(255,255,255,.55);--sh:0 8px 28px rgba(30,30,60,.10);--g:#34c759;--in:#5856d6;--or:#ff9500;--bk:#ffb800;--bl:#007aff;--ok:#34c759;
 position:relative;overflow:hidden;color:var(--l);font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif;border-radius:22px;padding:16px;display:flex;flex-direction:column;gap:12px;isolation:isolate;background:#f4f0ea}
 .sw.skyd{--l:#fff;--l2:rgba(235,235,245,.8);--gl:rgba(34,36,52,.72);--hi:rgba(255,255,255,.18);--rim:rgba(255,255,255,.08);--ed:rgba(255,255,255,.14);--sh:0 8px 28px rgba(0,0,0,.35)}
-.sw *{box-sizing:border-box}.sw button,.sw select{all:unset;border:0!important;box-shadow:none!important;background:transparent!important;min-height:0!important;height:auto!important;cursor:pointer;-webkit-tap-highlight-color:transparent;transition:transform .35s ${SP}}.sw button:active{transform:scale(.94)}.sw button:focus,.sw button:focus-visible,.sw select:focus{outline:none!important}
+.sw *{box-sizing:border-box}.sw button,.sw select{all:unset;border:0!important;box-shadow:none!important;background:transparent!important;min-height:0!important;height:auto!important;cursor:pointer;-webkit-tap-highlight-color:transparent;transition:transform var(--mx-snappy)}.sw button:active{transform:scale(.94)}.sw button:focus,.sw button:focus-visible,.sw select:focus{outline:none!important}
 .sw .glass{background:var(--gl);-webkit-backdrop-filter:blur(22px) saturate(180%);backdrop-filter:blur(22px) saturate(180%);border:0.5px solid var(--ed);box-shadow:inset 0 1px 0 var(--rim),var(--sh)}
 .sw .top{display:flex;gap:8px;align-items:center;flex-wrap:nowrap;min-width:0}.sw .ttl{font-size:17px;font-weight:700;letter-spacing:-.02em;flex:none;white-space:nowrap}.sw .sub{font-size:12px;color:var(--l2);cursor:pointer;user-select:none;display:block;flex:1 1 auto;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.sw .seg{flex:none;white-space:nowrap}@media (max-width:600px){.sw .seg small{display:none}}@media (max-width:420px){.sw .sub{display:none}.sw .ttl{margin-right:auto}}.sw .sub:hover{color:var(--l)}
-.sw .seg{position:relative;display:inline-grid;grid-auto-flow:column;gap:2px;padding:3px;border-radius:999px!important}.sw .seg .th2{position:absolute;top:3px;bottom:3px;left:0;width:0;border-radius:999px;background:var(--hi);box-shadow:inset 0 1px 0 rgba(255,255,255,.55),0 2px 10px rgba(0,0,0,.12);transition:left .5s ${SP},width .5s ${SP};z-index:0}
+.sw .seg{position:relative;display:inline-grid;grid-auto-flow:column;gap:2px;padding:3px;border-radius:999px!important}.sw .seg .th2{position:absolute;top:3px;bottom:3px;left:0;width:0;border-radius:999px;background:var(--hi);box-shadow:inset 0 1px 0 rgba(255,255,255,.55),0 2px 10px rgba(0,0,0,.12);z-index:0}
 .sw .seg button{position:relative;z-index:1;font-size:12px;font-weight:500;padding:4px 11px!important;border-radius:999px!important;color:var(--l);white-space:nowrap}.sw .seg button.on{font-weight:600}.sw .seg small{color:var(--l2);font-weight:400;margin-left:3px}
 .sw .fl{display:flex;gap:6px;align-items:center}.sw .fl select{font-size:12px;font-weight:500;color:var(--l);padding:5px 24px 5px 11px!important;border-radius:999px!important;background:var(--gl) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23888' stroke-width='1.5'/%3E%3C/svg%3E") no-repeat right 9px center!important;border:0.5px solid var(--ed)!important}
 .sw .th{display:flex;align-items:center;gap:6px;font-size:14px;font-weight:600;margin:0 2px 6px}.sw .th span{font-weight:400;font-size:12px;color:var(--l2)}.sw .th .ar{margin-left:auto;display:flex;gap:6px}
 .sw .ar button{display:grid;place-items:center;width:20px;height:22px!important;font-size:20px;line-height:1;font-weight:300;color:var(--l2)}.sw .ar button:hover{color:var(--l)}
 .sw .row{display:grid;grid-auto-flow:column;grid-auto-columns:230px;gap:10px;overflow-x:auto;scroll-snap-type:x mandatory;scroll-padding-inline:12px;scrollbar-width:none;padding:4px 12px 10px;margin:0 -12px;scroll-behavior:smooth;-webkit-mask-image:linear-gradient(90deg,transparent 0,#000 12px,#000 calc(100% - 28px),transparent);mask-image:linear-gradient(90deg,transparent 0,#000 12px,#000 calc(100% - 28px),transparent)}.sw .row::-webkit-scrollbar{display:none}
-.sw .cd{position:relative;scroll-snap-align:start;border-radius:18px!important;overflow:hidden;display:flex;flex-direction:column;min-width:0;cursor:pointer;padding:11px 12px 6px;gap:3px;transition:transform .45s ${SP},box-shadow .3s;animation:rise .45s ${SP} backwards;user-select:none}.sw .cd:hover{transform:translateY(-2px)}.sw{--sel:#8e8e93}.sw:focus-within{--sel:var(--bl)}.sw:focus{outline:0}.sw .cd.view{transform:translateY(-2px);box-shadow:inset 0 1px 0 var(--rim),0 0 0 2px var(--sel),var(--sh)}
-@keyframes rise{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+.sw .cd{position:relative;scroll-snap-align:start;border-radius:18px!important;overflow:hidden;display:flex;flex-direction:column;min-width:0;cursor:pointer;padding:11px 12px 6px;gap:3px;transition:transform var(--mx-snappy),box-shadow .3s;user-select:none}.sw .cd:hover{transform:translateY(-2px)}.sw{--sel:#8e8e93}.sw:focus-within{--sel:var(--bl)}.sw:focus{outline:0}.sw .cd.view{transform:translateY(-2px);box-shadow:inset 0 1px 0 var(--rim),0 0 0 2px var(--sel),var(--sh)}
 .sw .chips{display:flex;gap:5px;align-items:center;margin-bottom:3px}.sw .chip{font-size:11px;font-weight:600;padding:2px 8px;border-radius:999px;background:var(--hi);box-shadow:inset 0 0.5px 0 var(--rim);color:var(--l);display:inline-flex;align-items:center;gap:5px}.sw .chip i{width:7px;height:7px;border-radius:50%;display:inline-block}.sw .chip.ok{background:var(--ok);color:#fff}
-.sw .hr{position:relative;display:grid;place-items:center;width:44px;height:44px!important;margin:-6px -10px -2px 0;color:var(--l)!important;flex:none}.sw .hr svg{width:23px;height:23px;filter:drop-shadow(0 1px 1px rgba(0,0,0,.15));overflow:visible}.sw .hr.pop svg{animation:pop .55s ${SP}}
-@keyframes pop{0%{transform:scale(1)}25%{transform:scale(.6)}55%{transform:scale(1.3)}100%{transform:scale(1)}}
-.sw .pt{position:absolute;left:50%;top:50%;width:10px;height:10px;margin:-5px 0 0 -5px;pointer-events:none;animation:fly .65s cubic-bezier(.2,.8,.2,1) forwards}.sw .pt svg{width:10px;height:10px}
-@keyframes fly{0%{opacity:1;transform:translate(0,0) scale(.4)}100%{opacity:0;transform:translate(var(--x),var(--y)) scale(1)}}
+.sw .hr{position:relative;display:grid;place-items:center;width:44px;height:44px!important;margin:-6px -10px -2px 0;color:var(--l)!important;flex:none}.sw .hr svg{width:23px;height:23px;filter:drop-shadow(0 1px 1px rgba(0,0,0,.15));overflow:visible}
+.sw .pt{position:absolute;left:50%;top:50%;width:10px;height:10px;margin:-5px 0 0 -5px;pointer-events:none}.sw .pt svg{width:10px;height:10px}
 .sw .nm{font-size:14px;font-weight:600;line-height:1.28;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;min-height:36px}
 .sw .mt{font-size:12px;color:var(--l2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.sw .pb{display:flex;align-items:flex-end;margin-top:4px}.sw .pr{flex:1;display:block;font-size:18px;font-weight:700;letter-spacing:-.01em;font-variant-numeric:tabular-nums;line-height:1.1}.sw .pr small{font-size:12px;font-weight:500;color:var(--l2);margin-left:3px}.sw .pn{display:block;font-size:12px;font-weight:400;color:var(--l2);margin-top:2px}
-.sw .det{overflow:hidden;max-height:0;opacity:0;margin:0 2px;transition:max-height .5s ${SP},opacity .3s,margin .4s ${SP}}.sw .det.open{max-height:260px;opacity:1;margin:0 2px 4px}
+.sw .det{overflow:hidden;max-height:0;opacity:0;margin:0 2px}.sw .det.open{max-height:260px;opacity:1;margin:0 2px 4px}
 .sw .dp{border-radius:16px!important;padding:12px 14px;display:grid;grid-template-columns:1fr auto;gap:8px 14px}.sw .dh{grid-column:1/-1;display:flex;align-items:center;gap:8px}.sw .dh b{font-size:15px;font-weight:700;flex:1}.sw .dh .x{font-size:18px;color:var(--l2);width:28px;height:28px!important;display:grid;place-items:center}
 .sw .dg{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;font-size:12.5px}.sw .dg span:nth-child(odd){color:var(--l2)}.sw .da{display:flex;flex-direction:column;gap:6px;align-self:end;min-width:150px}
 .sw .pill{font-size:12px;font-weight:600;padding:7px 13px!important;border-radius:999px!important;text-align:center;color:var(--l);background:var(--hi)!important}.sw .pill.pri{color:#fff;background:color-mix(in srgb,var(--bl) 90%,transparent)!important}.sw .pill.ok{color:#fff;background:var(--ok)!important}.sw .pill[disabled]{opacity:.45;cursor:default}
 .sw .tot{display:flex;gap:6px;align-items:center;border-radius:16px!important;padding:8px 10px;font-size:12.5px;flex-wrap:wrap}.sw .tot b{font-weight:600}.sw .tot .sum{font-size:15px;font-weight:700;margin-left:auto}.sw .tot .c{color:var(--l2)}
-.sw .bg{position:absolute;inset:0;z-index:-1;overflow:hidden;pointer-events:none}.sw .sky{position:absolute;inset:0;opacity:0;transition:opacity 1s ${SP};background:linear-gradient(180deg,var(--t) 0%,var(--m) 55%,var(--b) 100%)}.sw .sky.on{opacity:1}
+.sw .bg{position:absolute;inset:0;z-index:-1;overflow:hidden;pointer-events:none}.sw .sky{position:absolute;inset:0;container-type:size;opacity:0;transition:opacity 1s ${SP};background:linear-gradient(180deg,var(--t) 0%,var(--m) 55%,var(--b) 100%)}.sw .sky.on{opacity:1}
 .sw .sky>*{position:absolute;transition:opacity 1.2s ${SP},left 1.2s ${SP},top 1.2s ${SP}}
 .sw .hz{left:-10%;right:-10%;bottom:-30%;height:70%;border-radius:50%;background:radial-gradient(closest-side,var(--o),transparent);opacity:0}
 .sw .sun{width:78px;height:78px;margin:-39px 0 0 -39px;left:var(--ox);top:var(--oy);border-radius:50%;background:radial-gradient(circle,var(--s1) 0 34%,var(--s2) 42%,transparent 70%);box-shadow:0 0 90px 36px var(--o);opacity:0}
 .sw .moon{width:30px;height:30px;margin:-15px 0 0 -15px;left:var(--ox);top:var(--oy);border-radius:50%;box-shadow:inset -8px 3px 0 0 #eef0ff;filter:drop-shadow(0 0 14px rgba(200,210,255,.65));opacity:0}
 .sw .stars{inset:0;background-image:radial-gradient(1px 1px at 8% 12%,#fff,transparent),radial-gradient(1.5px 1.5px at 17% 30%,#fff,transparent),radial-gradient(1px 1px at 26% 8%,#fff,transparent),radial-gradient(1px 1px at 33% 22%,#fff,transparent),radial-gradient(1.5px 1.5px at 41% 14%,#fff,transparent),radial-gradient(1px 1px at 48% 34%,#fff,transparent),radial-gradient(1px 1px at 55% 6%,#fff,transparent),radial-gradient(1.5px 1.5px at 62% 26%,#fff,transparent),radial-gradient(1px 1px at 70% 12%,#fff,transparent),radial-gradient(1px 1px at 77% 32%,#fff,transparent),radial-gradient(1.5px 1.5px at 84% 8%,#fff,transparent),radial-gradient(1px 1px at 91% 20%,#fff,transparent),radial-gradient(1px 1px at 13% 44%,#fff,transparent),radial-gradient(1px 1px at 37% 48%,#fff,transparent),radial-gradient(1px 1px at 58% 42%,#fff,transparent),radial-gradient(1px 1px at 80% 46%,#fff,transparent),radial-gradient(1.5px 1.5px at 4% 26%,#fff,transparent);opacity:0;animation:tw 5s ease-in-out infinite alternate;-webkit-mask-image:linear-gradient(180deg,#000 30%,transparent 75%);mask-image:linear-gradient(180deg,#000 30%,transparent 75%)}
 @keyframes tw{from{filter:brightness(.7)}to{filter:brightness(1.3)}}
-.sw .cl{top:var(--cy,14%);width:240px;height:60px;border-radius:50%;background:var(--cc);filter:blur(16px);opacity:0;animation:cloud 90s linear infinite}.sw .cl.c2{--cy:34%;width:320px;height:70px;animation-duration:130s;animation-delay:-60s}.sw .cl.c3{--cy:58%;width:200px;height:50px;animation-duration:110s;animation-delay:-30s}
-@keyframes cloud{from{left:-40%}to{left:110%}}
+.sw .cl{top:var(--cy,14%);width:240px;height:60px;border-radius:50%;background:var(--cc);filter:blur(16px);opacity:0;left:0;animation:cloud 90s linear infinite}.sw .cl.c2{--cy:34%;width:320px;height:70px;animation-duration:130s;animation-delay:-60s}.sw .cl.c3{--cy:58%;width:200px;height:50px;animation-duration:110s;animation-delay:-30s}
+@keyframes cloud{from{transform:translateX(-40cqw)}to{transform:translateX(110cqw)}}
 .sw .mist{left:0;right:0;bottom:0;height:45%;background:linear-gradient(0deg,var(--mi),transparent);opacity:0}
 .sw [data-ph=dawn] .sun{opacity:.95}.sw [data-ph=dawn] .hz{opacity:.9}.sw [data-ph=dawn] .stars{opacity:.25}.sw [data-ph=dawn] .cl{opacity:.55}.sw [data-ph=dawn] .mist{opacity:.8}
 .sw [data-ph=day] .sun{opacity:1}.sw [data-ph=day] .cl{opacity:.75}.sw [data-ph=day] .mist{opacity:.35}
@@ -122,8 +215,7 @@ position:relative;overflow:hidden;color:var(--l);font-family:-apple-system,Blink
 .sw [data-ph=night] .moon{opacity:1}.sw [data-ph=night] .stars{opacity:.95}.sw [data-ph=night] .cl{opacity:.07}.sw [data-ph=night] .hz{opacity:.35}
 .sw .bg::after{content:"";position:absolute;inset:0;background:rgba(0,0,0,0);transition:background .6s}
 @media (prefers-color-scheme:dark){.sw:not(.skyd) .bg::after{background:rgba(0,0,0,.45)}.sw:not(.skyd){--l:#fff;--l2:rgba(235,235,245,.8);--gl:rgba(34,36,52,.72);--hi:rgba(255,255,255,.18);--rim:rgba(255,255,255,.08);--ed:rgba(255,255,255,.14)}}
-.sw .spot{position:absolute;width:300px;height:300px;margin:-150px 0 0 -150px;left:var(--sx,50%);top:var(--sy,40%);border-radius:50%;background:radial-gradient(circle,rgba(255,255,255,.3),transparent 65%);opacity:0;transition:left .7s ${SP},top .7s ${SP},opacity .5s}.sw .spot.on{opacity:1}.sw.skyd .spot{background:radial-gradient(circle,rgba(160,180,255,.14),transparent 65%)}
-.sw .list{transition:opacity .2s}.sw .list.out{opacity:0}
+.sw .spot{position:absolute;width:300px;height:300px;margin:-150px 0 0 -150px;left:0;top:0;transform:translate(var(--sx,0px),var(--sy,0px));border-radius:50%;background:radial-gradient(circle,rgba(255,255,255,.3),transparent 65%);opacity:0;transition:transform var(--mx-smooth),opacity .5s}.sw .spot.on{opacity:1}.sw.skyd .spot{background:radial-gradient(circle,rgba(160,180,255,.14),transparent 65%)}
 @media (prefers-reduced-motion:reduce){.sw *{animation:none!important;transition:none!important}}
 /* shared Concierge scale: 16px padding (12px under 440px), 12px between sections, 8px inside */
 @media (max-width:440px){.sw{padding:12px}}`;
@@ -141,36 +233,49 @@ const H=on=>`<svg viewBox="0 0 24 24" fill="${on?'var(--bk)':'none'}" stroke="${
 const rate=s=>{if(!s.ra)return'No rating yet';const m=String(s.ra).match(/([\d.]+)\s*\/\s*10/);const v=m?+m[1]/2:+s.ra;return '★ '+(Math.round(v*10)/10).toFixed(1).replace(/\.0$/,'')+(s.rv?' ('+s.rv+')':' · few reviews')};
 const kl=s=>s.k=='hotel'?(s.st?s.st+'★ hotel':'Hotel'):s.k=='airbnb'?'Airbnb':'Vrbo';
 function card(s,i){const on=bm.has(s.id),ch=chosen[s.c]===s.id;
-return `<article class="cd glass${view===s.id?' view':''}" data-v="${s.id}" style="animation-delay:${Math.min(i,6)*35}ms"><span class="chips"><span class="chip"><i style="background:${T[s.t][1]}"></i>${T[s.t][0].split(' ')[0]} · ${kl(s)}</span>${ch?'<span class="chip ok">✓ Chosen</span>':''}</span>
+return `<article class="cd glass${view===s.id?' view':''}" data-v="${s.id}" style="animation:none"><span class="chips"><span class="chip"><i style="background:${T[s.t][1]}"></i>${T[s.t][0].split(' ')[0]} · ${kl(s)}</span>${ch?'<span class="chip ok">✓ Chosen</span>':''}</span>
 <span class="nm" title="${e(s.n)}">${e(s.n)}</span><span class="mt">${rate(s)} · ${e(s.w)}</span>
 <div class="pb"><span class="pr">${$(tot(s))}<small>${preTax(s)?'≈ before tax':'total'}</small><span class="pn">${$(pn(s))}/night</span></span><button class="hr" data-h="${s.id}" aria-label="${on?'Remove bookmark':'Bookmark'} ${e(s.n)}">${H(on)}</button></div></article>`}
 const items=()=>S.filter(s=>s.c==city&&(kind=='all'||s.k==kind)&&(tier=='all'||s.t==tier)).sort((a,b)=>tot(a)-tot(b));
-function list(){const l=items();return `<section><div class="th">${e(C(city).n)} stays<span>${l.length} · cheapest first</span><span class="ar"><button data-a="-1" aria-label="Previous stay">‹</button><button data-a="1" aria-label="Next stay">›</button></span></div><div class="row">${l.map(card).join('')||'<span class="mt" style="padding:8px">Nothing matches these filters.</span>'}</div><div class="det"></div></section>`}
+function list(){const l=items();return `<section><div class="th">${e(C(city).n)} stays<span>${l.length} · cheapest first</span><span class="ar"><button data-a="-1" aria-label="Previous stay">‹</button><button data-a="1" aria-label="Next stay">›</button></span></div><div class="row">${l.map(card).join('')||'<span class="mt" style="padding:8px">Nothing matches these filters.</span>'}</div><div class="det" style="transition:none"></div></section>`}
 function totals(){const L=[...bm].map(id=>S.find(x=>x.id==id)).filter(Boolean);let sum=0;const BK=D.booked||{},ch=Object.keys(D.cities).map(k=>{const b=BK[k];if(b){if(b.total)sum+=b.total;return `<span><span class="c">${e(C(k).n)}:</span> <b>${e(String(b.name||'').length>22?b.name.slice(0,21)+'…':b.name)}</b> <span class="c">✓ booked</span></span>`}const s=S.find(x=>x.id==chosen[k]);if(s)sum+=tot(s);return `<span><span class="c">${e(C(k).n)}:</span> <b>${s?e(s.n.length>22?s.n.slice(0,21)+'…':s.n):'not chosen'}</b></span>`}).join('<span class="c">·</span>');
-const n=Object.values(chosen).filter(Boolean).length,t=A.querySelector('.tot');
+const n=Object.values(chosen).filter(Boolean).length,t=A.querySelector('.tot'),os=t.querySelector('.sum'),oo=t.querySelector('#ob'),ost=os&&os.textContent,oot=oo&&oo.textContent;
 t.innerHTML=`${ch}<span class="sum">${sum?$(sum):''}</span><button class="pill" id="ob"${L.length?'':' disabled'}>Open ${L.length||''} bookmarked ↗</button><button class="pill pri" id="go"${n?'':' disabled'}>Send to concierge ↗</button>`;
+roll(t.querySelector('.sum'),ost);roll(t.querySelector('#ob'),oot);
 t.querySelector('#ob').onclick=()=>{if(L.length)sendPrompt('Open these in the side panel: '+L.map(x=>x.n+' ('+C(x.c).n+') '+book(x)).join(' | '))};
 t.querySelector('#go').onclick=()=>{if(!n)return;sendPrompt('Send to concierge, book these stays: '+Object.keys(D.cities).map(k=>{const b=(D.booked||{})[k];if(b)return C(k).n+' ('+C(k).d+'): already booked, '+b.name;const s=S.find(x=>x.id==chosen[k]);return C(k).n+' ('+C(k).d+'): '+(s?s.n+', '+$(tot(s))+(preTax(s)?' before local tax':'')+', '+book(s):'not chosen')}).join('; ')+'. Total '+$(sum))}}
-function burst(btn){const r=['#ffb800','#ffd24d','#ff9500','#ffc72c'];for(let i=0;i<8;i++){const p=document.createElement('span');p.className='pt';const a=i/8*Math.PI*2;p.style.setProperty('--x',Math.cos(a)*22+'px');p.style.setProperty('--y',Math.sin(a)*22+'px');p.innerHTML=`<svg viewBox="0 0 24 24" fill="${r[i%4]}"><path d="${HP}"/></svg>`;btn.appendChild(p);setTimeout(()=>p.remove(),700)}}
-function mark(id){const was=bm.has(id),b=A.querySelector(`[data-h="${id}"]`);if(was)bm.delete(id);else bm.add(id);if(b){b.innerHTML=H(!was);b.classList.remove('pop');if(!was){void b.offsetWidth;b.classList.add('pop');burst(b)}}const d=A.querySelector('.det [data-b]');if(d&&d.dataset.b==id)d.textContent=bm.has(id)?'Bookmarked':'Bookmark';totals()}
-function choose(s){if((D.booked||{})[s.c])return;chosen[s.c]=chosen[s.c]===s.id?null:s.id;const t=A.querySelector('.list');t.innerHTML=list();wire();select(s.id);totals()}
+function burst(btn){if(MX.R())return;const r=['#ffb800','#ffd24d','#ff9500','#ffc72c'];for(let i=0;i<8;i++){const p=document.createElement('span');p.className='pt';const a=i/8*Math.PI*2;p.innerHTML=`<svg viewBox="0 0 24 24" fill="${r[i%4]}"><path d="${HP}"/></svg>`;btn.appendChild(p);
+p.animate([{opacity:1,transform:'translate(0,0) scale(.4)'},{opacity:0,transform:`translate(${(Math.cos(a)*22).toFixed(1)}px,${(Math.sin(a)*22).toFixed(1)}px) scale(1)`}],{duration:650,easing:'cubic-bezier(.2,.8,.2,1)',fill:'forwards'}).finished.then(()=>p.remove()).catch(()=>p.remove())}}
+function mark(id){const was=bm.has(id),b=A.querySelector(`[data-h="${id}"]`);if(was)bm.delete(id);else bm.add(id);if(b){b.innerHTML=H(!was);if(!was){MX.pop(b,.6,'bouncy');burst(b)}else MX.pop(b,.9,'snappy')}const d=A.querySelector('.det [data-b]');if(d&&d.dataset.b==id){d.textContent=bm.has(id)?'Bookmarked':'Bookmark';MX.pop(d,.94,'snappy')}totals()}
+/* choose: the list re-renders for the chips, but in place (same scroll, drawer stays open); the pill and the Chosen chip pop */
+function choose(s){if((D.booked||{})[s.c])return;chosen[s.c]=chosen[s.c]===s.id?null:s.id;const t=A.querySelector('.list'),ro=t.querySelector('.row'),sl=ro?ro.scrollLeft:0;t.innerHTML=list();const r2=t.querySelector('.row');if(r2){r2.style.scrollBehavior='auto';r2.scrollLeft=sl;r2.style.scrollBehavior=''}wire();select(s.id,1);totals();
+const ch=chosen[s.c]===s.id,p=A.querySelector('.det [data-ch]');if(p)MX.pop(p,ch?.9:.94,ch?'bouncy':'snappy');if(ch)MX.pop(A.querySelector(`[data-v="${s.id}"] .chip.ok`),.82,'bouncy')}
+const roll=(el,old)=>{if(!el||old==null)return;const t=el.textContent;if(t===old)return;el.textContent=old;MX.text(el,t)};
 function detail(s){const c=C(s.c),on=bm.has(s.id),ch=chosen[s.c]===s.id;return `<div class="dp glass"><div class="dh"><b>${e(s.n)}</b><button class="x" aria-label="Close details">×</button></div>
 <div class="dg"><span>Dates</span><span>${e(c.d)} · ${c.k} night${c.k>1?'s':''}</span><span>Price</span><span>${$(tot(s))} · ${$(pn(s))}/night</span><span>Taxes</span><span>${taxNote(s)}</span>${s.lp&&s.lp<pn(s)?`<span>Cheaper seen</span><span>${$(s.lp)}/night on ${e(s.ls)}</span>`:''}<span>Where</span><span>${e(s.w)}</span><span>Rating</span><span>${rate(s)}</span><span>Book on</span><span>${host(s.ln)}</span></div>
 <div class="da"><button class="pill ${ch?'ok':'pri'}" data-ch="1">${ch?'✓ Chosen for '+e(c.n):'Choose for '+e(c.n)}</button><button class="pill" data-o="1">Open on the right ↗</button><button class="pill" data-b="${s.id}">${on?'Bookmarked':'Bookmark'}</button></div></div>`}
-function openDet(c,s){const d=A.querySelector('.det');d.innerHTML=detail(s);requestAnimationFrame(()=>d.classList.add('open'));
-d.querySelector('.x').onclick=()=>{d.classList.remove('open');c.classList.remove('view');view=null;A.querySelector('.spot').classList.remove('on')};
+function openDet(c,s,inst,pv){const d=A.querySelector('.det'),set=v=>d.classList.toggle('open',v);
+const fill=()=>{d.innerHTML=detail(s);
+d.querySelector('.x').onclick=()=>{d._open=false;MX.disclose(d,false,set,{body:'.dp'});c.classList.remove('view');view=null;A.querySelector('.spot').classList.remove('on')};
 d.querySelector('[data-o]').onclick=()=>sendPrompt(`Open in side panel: ${s.n} (${C(s.c).n}, ${C(s.c).d}) ${book(s)}`);
-d.querySelector('[data-b]').onclick=()=>mark(s.id);d.querySelector('[data-ch]').onclick=()=>choose(s)}
-function center(c){const r=c.parentElement;r.scrollTo({left:c.offsetLeft-(r.clientWidth-c.offsetWidth)/2,behavior:'smooth'})}
-function select(id){const c=A.querySelector(`[data-v="${id}"]`);if(!c)return;A.querySelectorAll('.cd.view').forEach(x=>x!==c&&x.classList.remove('view'));c.classList.add('view');view=id;center(c);
-setTimeout(()=>{const W2=W.getBoundingClientRect(),b=c.getBoundingClientRect(),sp=A.querySelector('.spot');sp.style.setProperty('--sx',(b.left-W2.left+b.width/2)+'px');sp.style.setProperty('--sy',(b.top-W2.top+b.height/2)+'px');sp.classList.add('on')},380);openDet(c,S.find(y=>y.id==id))}
+d.querySelector('[data-b]').onclick=()=>mark(s.id);d.querySelector('[data-ch]').onclick=()=>choose(s)};
+if(inst){fill();set(true);d._open=true;return}
+if(d._open&&pv&&pv!==s.id){const ix=id=>[...A.querySelectorAll('.row .cd')].findIndex(x=>x.dataset.v==id);MX.swap(()=>d.querySelector('.dp'),Math.sign(ix(s.id)-ix(pv))||1,fill);return}
+fill();if(!d._open){d._open=true;MX.disclose(d,true,set,{body:'.dp'})}}
+function center(c){const r=c.parentElement;r.scrollTo({left:c.offsetLeft-(r.clientWidth-c.offsetWidth)/2,behavior:MX.R()?'auto':'smooth'})}
+function select(id,inst){const c=A.querySelector(`[data-v="${id}"]`);if(!c)return;const pv=view;A.querySelectorAll('.cd.view').forEach(x=>x!==c&&x.classList.remove('view'));c.classList.add('view');view=id;center(c);
+setTimeout(()=>{const W2=W.getBoundingClientRect(),b=c.getBoundingClientRect(),sp=A.querySelector('.spot');sp.style.setProperty('--sx',(b.left-W2.left+b.width/2)+'px');sp.style.setProperty('--sy',(b.top-W2.top+b.height/2)+'px');sp.classList.add('on')},380);openDet(c,S.find(y=>y.id==id),inst,pv)}
 function wire(){A.querySelectorAll('[data-h]').forEach(b=>b.onclick=x=>{x.stopPropagation();mark(b.dataset.h)});
 A.querySelectorAll('[data-v]').forEach(c=>{c.onclick=()=>{W.focus({preventScroll:true});select(c.dataset.v)}});
 const r=[...A.querySelectorAll('.row .cd')];A.querySelectorAll('[data-a]').forEach(b=>b.onclick=()=>{W.focus({preventScroll:true});if(!r.length)return;const d=+b.dataset.a,i=r.findIndex(c=>c.dataset.v==view);const n=i<0?(d>0?0:r.length-1):Math.max(0,Math.min(r.length-1,i+d));select(r[n].dataset.v)})}
-const thumbs={};function seg(el,key){const on=el.querySelector('button.on'),th=el.querySelector('.th2');if(!on)return;const prev=thumbs[key]||{l:on.offsetLeft,w:on.offsetWidth};th.style.transition='none';th.style.left=prev.l+'px';th.style.width=prev.w+'px';void th.offsetWidth;th.style.transition='';th.style.left=on.offsetLeft+'px';th.style.width=on.offsetWidth+'px';thumbs[key]={l:on.offsetLeft,w:on.offsetWidth}}
+function seg(el){const on=el.querySelector('button.on'),th=el.querySelector('.th2');if(!on||!th)return;th.style.transition='none';th.style.transform=`translateX(${on.offsetLeft}px)`;th.style.width=on.offsetWidth+'px'}
 function controls(){A.querySelector('#cs').innerHTML='<span class="th2"></span>'+Object.entries(D.cities).map(([k,v])=>`<button data-c="${k}" class="${k==city?'on':''}">${e(v.n)}<small>${(D.booked||{})[k]?'Booked':e(v.d)}</small></button>`).join('');
-requestAnimationFrame(()=>seg(A.querySelector('#cs'),'c'));A.querySelectorAll('[data-c]').forEach(b=>b.onclick=()=>{if(city==b.dataset.c)return;city=b.dataset.c;view=null;swap()})}
-function swap(){controls();A.querySelectorAll('.sky').forEach(x=>x.classList.toggle('on',x.dataset.c==city));sky();A.querySelector('.spot').classList.remove('on');const t=A.querySelector('.list');t.classList.add('out');setTimeout(()=>{t.innerHTML=list();t.classList.remove('out');wire()},150)}
+seg(A.querySelector('#cs'));requestAnimationFrame(()=>seg(A.querySelector('#cs')));A.querySelectorAll('[data-c]').forEach(b=>b.onclick=()=>{if(city==b.dataset.c)return;const ks=Object.keys(D.cities),dd=Math.sign(ks.indexOf(b.dataset.c)-ks.indexOf(city));city=b.dataset.c;view=null;swap(dd)})}
+/* swap(dir): a city switch slides the whole list in the direction of travel; a filter (no dir) crossfades just the cards and rolls the count */
+function swap(dd){MX.flip('#cs .th2',controls);A.querySelectorAll('.sky').forEach(x=>x.classList.toggle('on',x.dataset.c==city));sky();A.querySelector('.spot').classList.remove('on');
+const t=A.querySelector('.list'),ro=t.querySelector('.row'),sl=ro?ro.scrollLeft:0,cn=t.querySelector('.th>span'),oc=cn&&cn.textContent,city2=dd!=null;
+MX.swap(()=>A.querySelector(city2?'.list>section':'.list .row'),city2?dd:0,()=>{t.innerHTML=list();wire()});
+const g=A.querySelector('.sw>[inert]'),gr=g&&(g.matches('.row')?g:g.querySelector('.row'));if(gr){gr.style.scrollBehavior='auto';gr.scrollLeft=sl}if(!city2)roll(t.querySelector('.th>span'),oc)}
 A.innerHTML=`<style>${css}</style><div class="sw"><div class="bg">${Object.keys(D.cities).map(k=>`<div class="sky${k==city?' on':''}" data-c="${k}"><span class="stars"></span><span class="hz"></span><span class="cl"></span><span class="cl c2"></span><span class="cl c3"></span><span class="sun"></span><span class="moon"></span><span class="mist"></span></div>`).join('')}<div class="spot"></div></div>
 <div class="top"><span class="ttl">Concierge · Stay</span><span class="sub" id="clk" title="Tap to preview dawn, day, dusk and night"></span><span class="seg glass" id="cs"></span></div>
 <div class="top"><span class="fl"><select id="fk" aria-label="Type"><option value="all">All types</option><option value="hotel">Hotels</option><option value="airbnb">Airbnb</option><option value="vrbo">Vrbo</option></select><select id="ft" aria-label="Tier"><option value="all">All tiers</option><option value="b">Budget</option><option value="l">Larping</option><option value="x">Balling out</option></select></span></div>
@@ -188,7 +293,8 @@ const t=h+m/60,real=t>=5&&t<8?'dawn':t>=8&&t<17?'day':t>=17&&t<20?'dusk':'night'
 let [x,y]=P.pos;if(!force&&ph=='day'){const f=(t-8)/9;x=10+f*80;y=14+Math.pow(Math.abs(f-.5)*2,2)*30}el.style.setProperty('--ox',x+'%');el.style.setProperty('--oy',y+'%');el.dataset.ph=ph;
 if(k==city){W.classList.toggle('skyd',!!P.d);const tf=new Intl.DateTimeFormat('en-US',{timeZone:tz,hour:'numeric',minute:'2-digit'}).format(new Date());A.querySelector('#clk').innerHTML=`<span aria-hidden="true">◐</span>${force?'Preview: '+ph+' · tap for next':tf+' '+e(C(k).n)+' · '+e(C(k).by||'')}`}})}
 A.querySelector('#clk').onclick=()=>{const i=force?ORDER.indexOf(force)+1:0;force=i<ORDER.length?ORDER[i]:null;sky()};
-controls();wire();totals();sky();setInterval(sky,60000);/* Ask Concierge bar (standard in every Concierge widget): one-line pill at the bottom of the card. The arrow shows once there is text;
+controls();wire();totals();sky();setInterval(sky,60000);{const sp=A.querySelector('.spot');sp.style.setProperty('--sx',W.clientWidth/2+'px');sp.style.setProperty('--sy',W.clientHeight*.4+'px')}
+MX.enter(W,{y:12});MX.enter(A.querySelectorAll('.sw>.top,.list .th,.list .cd,.sw>.tot'),{y:8,step:28});/* Ask Concierge bar (standard in every Concierge widget): one-line pill at the bottom of the card. The arrow shows once there is text;
  Enter or the arrow calls sendPrompt("[<what is on screen>] <text>"), clears the field and shows "Sent to chat" for a moment. */
 function askBar(sel,ctx,look){const b=document.createElement('form');b.className='askc '+look;b.setAttribute('autocomplete','off');
 b.innerHTML=`<style>.askc{all:unset;box-sizing:border-box;display:flex;align-items:center;width:100%;min-width:0;height:44px;border-radius:22px;padding:0 0 0 16px;flex:none;position:relative;isolation:isolate;font-family:inherit;
